@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html>
+	<head>
+		<meta charset="utf-8" />
+		<title></title>
+		<link rel="stylesheet" href="min.css" />
+		<style>
+			#container {
+				margin: 0 25% 0 25%;
+			}
+
+			#controls {
+				margin-top: 10px;
+			}
+			button {
+				font-size: 18pt;
+				width: 10%;
+			}
+			.rangeslider--horizontal {
+				margin-top:5px;
+				float:right;
+				width: 90%;
+			}
+		</style>
+		<script src="min.js"></script>
+		<script src="player.js"></script>
+		<script src="events.js"></script>
+	</head>
+	<body>
+		<div id="container"></div>
+		<script>
+			var p = player("foo.m4a", $("#container"), _tre);
+		</script>
+	</body>
+</html>
