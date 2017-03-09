@@ -1,5 +1,9 @@
 # CasTTY To Do Items
 
+## Misc
+
+Convert these TODO items to issues in the GH repo.
+
 ## Bugs
 
 I stripped down ttyrec heavily to make CasTTY, and have broken some terminal
