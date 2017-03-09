@@ -30,23 +30,23 @@ read_header(FILE *fp, Header *h)
 int
 write_header(FILE *fp, Header *h)
 {
-	static struct timespec first;
+	static struct timeval first;
 	static double fms;
 
-	struct timespec now;
+	struct timeval now;
 	double nms;
 
 	if (first.tv_sec == 0) {
-		clock_gettime(CLOCK_MONOTONIC_RAW, &first);
-		fms = (double)(first.tv_sec * 1000) + ((double)first.tv_nsec / 1000000.);
+		first = h->tv;
+		fms = (double)(first.tv_sec * 1000) + ((double)first.tv_usec / 1000.);
 		now = first;
 		fputs("var _tre=[{", fp);
 	} else {
-		clock_gettime(CLOCK_MONOTONIC_RAW, &now);
+		now = h->tv;
 		fputs("\"},{", fp);
 	}
 
-	nms = (double)(now.tv_sec * 1000) + ((double)now.tv_nsec / 1000000.);
+	nms = (double)(now.tv_sec * 1000) + ((double)now.tv_usec / 1000.);
 
 	fprintf(fp, "\"s\":%0.3f,\"e\":\"", nms - fms);
 
