@@ -5,9 +5,6 @@
 I stripped down ttyrec heavily to make CasTTY, and have broken some terminal
 handling stuff. That needs fixing.
 
-There's a stupid bug with outputting events.js in a broken fashion, but I've
-been too lazy to care.
-
 Appending to a recording doesn't really work (audio is fine, but the JS output
 breaks).
 
