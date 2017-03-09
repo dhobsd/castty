@@ -213,7 +213,7 @@ audio_init(const char *file, int flag)
 		fflush(stdout);
 
 		int r = scanf("%d", &d);
-		if (r == EOF) {
+		if (r != 1) {
 			perror("scanf");
 			exit(EXIT_FAILURE);
 		}
