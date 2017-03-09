@@ -106,12 +106,12 @@ main(int argc, char **argv)
 		fail();
 	}
 	if (child == 0) {
-		subchild = child = fork();
-		if (child < 0) {
+		subchild = fork();
+		if (subchild < 0) {
 			perror("fork");
 			fail();
 		}
-		if (child) {
+		if (subchild) {
 			dooutput();
 		} else {
 			doshell(command);
@@ -255,8 +255,9 @@ done()
 		(void) close(master);
 	} else {
 		(void) tcsetattr(0, TCSAFLUSH, &tt);
+
+		exit(0);
 	}
-	exit(0);
 }
 
 
