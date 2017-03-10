@@ -58,7 +58,7 @@ var player = function(audioFile, containerElem, termEvents) {
 			if (Player.termEvents[Player.eventOff + 1]) {
 				Player.timerHandle = setTimeout(Player.nextEvent,
 				    (Player.termEvents[Player.eventOff + 1].s -
-				     Player.termEvents[Player.eventOff].s));
+				     Player.audio.currentTime * 1000));
 			}
 
 			Player.eventOff++;
