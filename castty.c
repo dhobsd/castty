@@ -18,14 +18,6 @@
 
 #include "castty.h"
 
-void done(void);
-void fail(void);
-void fixtty(void);
-void getslave(void);
-void doinput(void);
-void dooutput(void);
-void doshell(const char*);
-
 static char	*shell;
 static FILE	*fscript;
 static int	master;
@@ -39,108 +31,57 @@ static struct	winsize win;
 static int	aflg;
 static char	*rflg;
 
-int
-main(int argc, char **argv)
+static void
+done(void)
 {
-	extern int optind;
-	int ch;
-	void finish();
-	char *getenv();
-	char *command = NULL;
 
-	while ((ch = getopt(argc, argv, "aue:h?r:")) != EOF) {
-		switch ((char)ch) {
-		case 'a':
-			aflg++;
-			break;
-		case 'e':
-			command = strdup(optarg);
-			break;
-		case 'r':
-			rflg = strdup(optarg);
-			break;
-		case 'h':
-		case '?':
-		default:
-			fprintf(stderr, "usage: ttyrec [-e command] [-a] [file]\n");
-			exit(1);
-		}
-	}
+	if (subchild) {
+		Header h;
 
-	argc -= optind;
-	argv += optind;
+		gettimeofday(&h.tv, NULL);
+		fflush(fscript);
+		(void) write_header(fscript, &h);
+		fputs("\"}];", fscript);
 
-	if (argc > 0) {
-		fname = argv[0];
+		(void) fclose(fscript);
+		(void) close(master);
 	} else {
-		fname = "events.js";
+		(void) tcsetattr(0, TCSAFLUSH, &tt);
+
+		exit(0);
 	}
-
-	if (rflg) {
-		audio_init(rflg, aflg);
-	}
-
-	if ((fscript = fopen(fname, aflg ? "ab" : "wb")) == NULL) {
-		perror(fname);
-		fail();
-	}
-	setbuf(fscript, NULL);
-
-	shell = getenv("SHELL");
-	if (shell == NULL) {
-		shell = "/bin/sh";
-	}
-
-	(void) tcgetattr(0, &tt); 
-	master = posix_openpt(O_RDWR | O_NOCTTY);
-	(void) ioctl(0, TIOCGWINSZ, (char *)&win);
-
-	fixtty();
-
-	(void) signal(SIGCHLD, finish);
-	child = fork();
-	if (child < 0) {
-		perror("fork");
-		fail();
-	}
-	if (child == 0) {
-		subchild = fork();
-		if (subchild < 0) {
-			perror("fork");
-			fail();
-		}
-		if (subchild) {
-			dooutput();
-		} else {
-			doshell(command);
-		}
-	}
-	audio_toggle();
-	doinput();
-
-	return 0;
 }
 
-void
-doinput(void)
+static void
+fail(void)
 {
-	char ibuf[BUFSIZ];
-	int cc;
 
-	(void) fclose(fscript);
-
-	while ((cc = read(0, ibuf, BUFSIZ)) > 0) {
-		(void) write(master, ibuf, cc);
-	}
+	(void) kill(0, SIGTERM);
 	done();
 }
 
-void
-finish(void)
+static void
+doinput(int masterfd)
+{
+	char ibuf[BUFSIZ];
+	ssize_t cc;
+
+	/* Read input from stdin and write it to our master pty handle */
+	while ((cc = read(STDIN_FILENO, ibuf, BUFSIZ)) > 0) {
+		(void) write(masterfd, ibuf, cc);
+	}
+
+	done();
+}
+
+static void
+finish(int sig)
 {
 	int status;
 	int pid;
 	int die = 0;
+
+	(void)sig;
 
 	while ((pid = waitpid(-1, (int *)&status, WNOHANG)) > 0) {
 		if (pid == child) {
@@ -153,8 +94,8 @@ finish(void)
 	}
 }
 
-void
-dooutput()
+static void
+dooutput(void)
 {
 	int cc;
 	char obuf[BUFSIZ];
@@ -197,10 +138,22 @@ dooutput()
 	done();
 }
 
-void
+static void
 doshell(const char* command)
 {
-	getslave();
+
+	(void) setsid();
+	grantpt(master);
+	unlockpt(master);
+	if ((slave = open(ptsname(master), O_RDWR)) < 0) {
+		perror("open");
+		fail();
+	}
+
+	(void) setsid();
+	(void) ioctl(slave, TIOCSCTTY, 0);
+	(void) ioctl(slave, TIOCSWINSZ, (char *)&win);
+
 	(void) close(master);
 	(void) fclose(fscript);
 	(void) dup2(slave, 0);
@@ -217,8 +170,8 @@ doshell(const char* command)
 	fail();
 }
 
-void
-fixtty()
+static void
+fixtty(void)
 {
 	struct termios rtt;
 
@@ -233,48 +186,91 @@ fixtty()
 	(void) tcsetattr(0, TCSAFLUSH, &rtt);
 }
 
-void
-fail()
+int
+main(int argc, char **argv)
 {
+	char *command = NULL;
+	extern int optind;
+	int ch;
 
-	(void) kill(0, SIGTERM);
-	done();
-}
-
-void
-done()
-{
-	if (subchild) {
-		Header h;
-
-		gettimeofday(&h.tv, NULL);
-		fflush(fscript);
-		(void) write_header(fscript, &h);
-		fputs("\"}];", fscript);
-
-		(void) fclose(fscript);
-		(void) close(master);
-	} else {
-		(void) tcsetattr(0, TCSAFLUSH, &tt);
-
-		exit(0);
+	while ((ch = getopt(argc, argv, "aue:h?r:")) != EOF) {
+		switch ((char)ch) {
+		case 'a':
+			aflg++;
+			break;
+		case 'e':
+			command = strdup(optarg);
+			break;
+		case 'r':
+			rflg = strdup(optarg);
+			break;
+		case 'h':
+		case '?':
+		default:
+			fprintf(stderr, "usage: ttyrec [-e command] [-a] [-r audio.raw] [file]\n");
+			exit(1);
+		}
 	}
-}
 
+	argc -= optind;
+	argv += optind;
 
-void
-getslave()
-{
+	if (argc > 0) {
+		fname = argv[0];
+	} else {
+		fname = "events.js";
+	}
 
-	(void) setsid();
-	grantpt(master);
-	unlockpt(master);
-	if ((slave = open(ptsname(master), O_RDWR)) < 0) {
-		perror("open");
+	if (rflg) {
+		audio_init(rflg, aflg);
+	}
+
+	if ((fscript = fopen(fname, aflg ? "ab" : "wb")) == NULL) {
+		perror(fname);
+		fail();
+	}
+	setbuf(fscript, NULL);
+
+	shell = getenv("SHELL");
+	if (shell == NULL) {
+		shell = "/bin/sh";
+	}
+
+	(void) tcgetattr(0, &tt);
+	master = posix_openpt(O_RDWR | O_NOCTTY);
+	(void) ioctl(0, TIOCGWINSZ, (char *)&win);
+
+	fixtty();
+
+	(void) signal(SIGCHLD, finish);
+
+	child = fork();
+	if (child < 0) {
+		perror("fork");
 		fail();
 	}
 
-	(void) setsid();
-	(void) ioctl(slave, TIOCSCTTY, 0);
-	(void) ioctl(slave, TIOCSWINSZ, (char *)&win);
+	if (child == 0) {
+		subchild = fork();
+		if (subchild < 0) {
+			perror("fork");
+			fail();
+		}
+
+		if (subchild) {
+			/* Handle output to file in parent */
+			dooutput();
+		} else {
+			/* Run the shell in the child */
+			doshell(command);
+		}
+	}
+
+	/* Don't output in parent process */
+	(void)fclose(fscript);
+
+	audio_toggle();
+	doinput(master);
+
+	return 0;
 }
