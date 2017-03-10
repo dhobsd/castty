@@ -9,6 +9,8 @@
 #include <ck_ring.h>
 #include <portaudio.h>
 
+#include "castty.h"
+
 #ifndef MIN
 #define MIN(a, b) ((a < b) ? a : b)
 #endif

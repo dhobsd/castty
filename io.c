@@ -9,7 +9,7 @@
 #include <unistd.h>
 
 #include "endian.h"
-#include "ttyrec.h"
+#include "castty.h"
 
 int
 read_header(FILE *fp, Header *h)

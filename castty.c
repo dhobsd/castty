@@ -16,9 +16,7 @@
 #include <signal.h>
 #include <termios.h>
 
-#include "audio.h"
-#include "ttyrec.h"
-#include "io.h"
+#include "castty.h"
 
 void done(void);
 void fail(void);
@@ -177,7 +175,7 @@ dooutput()
 		gettimeofday(&h.tv, NULL);
 		(void) write(1, obuf, cc);
 		(void) write_header(fscript, &h);
-		for (size_t i = 0; i < cc; i++) {
+		for (int i = 0; i < cc; i++) {
 			switch (obuf[i]) {
 			case '"':
 			case '\\':

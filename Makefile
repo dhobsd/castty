@@ -1,5 +1,5 @@
 CC = gcc
-CFLAGS = -O2 -I/usr/local/include -Wall
+CFLAGS = -O2 -I/usr/local/include -Wall -Wextra
 
 TARGET = castty
 
