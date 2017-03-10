@@ -61,15 +61,48 @@ fail(void)
 }
 
 static void
+do_write(int fd, void *buf, size_t len)
+{
+
+	if (write(fd, buf, len) < 0) {
+		perror("write");
+		exit(EXIT_FAILURE);
+	}
+}
+
+static void
 doinput(int masterfd)
 {
 	unsigned char ibuf[BUFSIZ];
+	static int paused = 0;
 	ssize_t cc;
 
 	/* Read input from stdin and write it to our master pty handle */
 	while ((cc = read(STDIN_FILENO, ibuf, BUFSIZ)) > 0) {
-		if (write(masterfd, ibuf, cc) < 0) {
-			perror("write");
+		unsigned char *pause;
+
+		pause = memchr(ibuf, 0x05, cc);
+		if (pause != NULL) {
+			if (!paused) {
+				if (pause > ibuf) {
+					do_write(masterfd, ibuf, pause - ibuf - 1);
+				}
+				fprintf(stderr, "\r\n*** PAUSED ***\r\n");
+			} else {
+				ssize_t diff = pause - ibuf;
+				if (diff < cc) {
+					diff = cc - diff;
+					do_write(masterfd, pause + 1, diff);
+				}
+				fprintf(stderr, "\r\n*** UNPAUSED ***\r\n");
+			}
+
+			audio_toggle();
+			paused = !paused;
+		}
+
+		if (!paused) {
+			do_write(masterfd, ibuf, cc);
 		}
 	}
 

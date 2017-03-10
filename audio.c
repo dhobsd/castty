@@ -190,7 +190,6 @@ reader(void *v)
 				    Pa_GetErrorText(err));
 				exit(EXIT_FAILURE);
 			}
-			fprintf(stderr, "Paused recording\n");
 		} else if (record == 1 && Pa_IsStreamStopped(stream) == 1) {
 			err = Pa_StartStream(stream);
 
@@ -199,7 +198,6 @@ reader(void *v)
 				    Pa_GetErrorText(err));
 				exit(EXIT_FAILURE);
 			}
-			fprintf(stderr, "Started recording\n");
 		}
 
 		if (post) {
