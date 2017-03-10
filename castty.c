@@ -273,4 +273,5 @@ getslave()
 
 	(void) setsid();
 	(void) ioctl(slave, TIOCSCTTY, 0);
+	(void) ioctl(slave, TIOCSWINSZ, (char *)&win);
 }
