@@ -97,7 +97,58 @@ reader(void *v)
 {
 	PaError err;
 
-	(void)v;
+	(void) v;
+
+	err = Pa_Initialize();
+	if (err != paNoError) {
+		fprintf(stderr, "Pa_Initialize: %s\n", Pa_GetErrorText(err));
+		exit(EXIT_FAILURE);
+	}
+
+	int ndev;
+
+	ndev = Pa_GetDeviceCount();
+	if (ndev < 0) {
+		fprintf(stderr, "Pa_GetDeviceCount: %s\n",
+		    Pa_GetErrorText(err));
+		exit(EXIT_FAILURE);
+	} else if (ndev == 0) {
+		fprintf(stderr, "No audio devices found!\n");
+		exit(EXIT_FAILURE);
+	}
+
+	while (1) {
+		int d;
+
+		for (int i = 0; i < ndev; i++) {
+			const PaDeviceInfo *dev;
+
+			dev = Pa_GetDeviceInfo(i);
+			if (dev->maxInputChannels) {
+				printf("%d:\t%s (%d ch)\n", i, dev->name,
+				    dev->maxInputChannels);
+			}
+		}
+
+		printf("Select input device: ");
+		fflush(stdout);
+
+		int r = scanf("%d", &d);
+		if (r != 1) {
+			perror("scanf");
+			exit(EXIT_FAILURE);
+		}
+
+		if (d > ndev) {
+			fprintf(stderr, "Invalid selection\n");
+		}
+		cdev = Pa_GetDeviceInfo(d);
+		if (!cdev->maxInputChannels) {
+			fprintf(stderr, "Invalid selection\n");
+		} else {
+			break;
+		}
+	}
 
 	/* 44100Hz * 16 bit samples * 2 channels */
 	buffer.b = calloc(np2(44100 * 4), sizeof buffer.b);
@@ -179,57 +230,6 @@ audio_toggle(void)
 void
 audio_init(const char *file, int flag)
 {
-	PaError err;
-
-	err = Pa_Initialize();
-	if (err != paNoError) {
-		fprintf(stderr, "Pa_Initialize: %s\n", Pa_GetErrorText(err));
-		exit(EXIT_FAILURE);
-	}
-
-	int ndev;
-
-	ndev = Pa_GetDeviceCount();
-	if (ndev < 0) {
-		fprintf(stderr, "Pa_GetDeviceCount: %s\n",
-		    Pa_GetErrorText(err));
-		exit(EXIT_FAILURE);
-	} else if (ndev == 0) {
-		fprintf(stderr, "No audio devices found!\n");
-		exit(EXIT_FAILURE);
-	}
-
-	while (1) {
-		int d;
-
-		for (int i = 0; i < ndev; i++) {
-			const PaDeviceInfo *dev;
-
-			dev = Pa_GetDeviceInfo(i);
-			if (dev->maxInputChannels) {
-				printf("%d:\t%s\n", i, dev->name);
-			}
-		}
-
-		printf("Select input device: ");
-		fflush(stdout);
-
-		int r = scanf("%d", &d);
-		if (r != 1) {
-			perror("scanf");
-			exit(EXIT_FAILURE);
-		}
-
-		if (d > ndev) {
-			fprintf(stderr, "Invalid selection\n");
-		}
-		cdev = Pa_GetDeviceInfo(d);
-		if (!cdev->maxInputChannels) {
-			fprintf(stderr, "Invalid selection\n");
-		} else {
-			break;
-		}
-	}
 
 	buffer.file = fopen(file, flag ? "ab" : "wb");
 	if (buffer.file == NULL) {
