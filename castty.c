@@ -68,7 +68,9 @@ doinput(int masterfd)
 
 	/* Read input from stdin and write it to our master pty handle */
 	while ((cc = read(STDIN_FILENO, ibuf, BUFSIZ)) > 0) {
-		(void) write(masterfd, ibuf, cc);
+		if (write(masterfd, ibuf, cc)) {
+			perror("write");
+		}
 	}
 
 	done();
@@ -117,8 +119,13 @@ dooutput(void)
 		h.len = cc;
 
 		gettimeofday(&h.tv, NULL);
-		(void) write(1, obuf, cc);
-		(void) write_header(fscript, &h);
+
+		if (write(1, obuf, cc) < 0) {
+			perror("write");
+			done();
+		}
+
+		write_header(fscript, &h);
 		for (int i = 0; i < cc; i++) {
 			switch (obuf[i]) {
 			case '"':
@@ -162,9 +169,9 @@ doshell(const char* command)
 	(void) close(slave);
 
 	if (!command) {
-		execl(shell, strrchr(shell, '/') + 1, "-i", 0);
+		execl(shell, strrchr(shell, '/') + 1, "-i", NULL);
 	} else {
-		execl(shell, strrchr(shell, '/') + 1, "-c", command, 0);	
+		execl(shell, strrchr(shell, '/') + 1, "-c", command, NULL);
 	}
 	perror(shell);
 	fail();
@@ -190,6 +197,7 @@ int
 main(int argc, char **argv)
 {
 	char *command = NULL;
+	extern char *optarg;
 	extern int optind;
 	int ch;
 
