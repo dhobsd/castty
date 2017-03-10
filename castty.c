@@ -162,6 +162,9 @@ dooutput()
 	setbuf(stdout, NULL);
 	(void) close(0);
 
+	fprintf(fscript, "var _ti={\"rows\":%hd,\"cols\":%hd};\n",
+	    win.ws_row, win.ws_col);
+
 	for (;;) {
 		Header h;
 

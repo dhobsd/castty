@@ -14,10 +14,10 @@ var getTimeout = (function() {
 	}
 })();
 
-var player = function(audioFile, containerElem, termEvents) {
+var player = function(audioFile, containerElem, termEvents, termInfo) {
 	var Player = {};
 	
-	var init = function(audioFile, containerElem, termEvents) {
+	var init = function(audioFile, containerElem, termEvents, termInfo) {
 		Player.container = containerElem;
 
 		Player.termContainer = $('<div id="term"></div>')
@@ -27,8 +27,8 @@ var player = function(audioFile, containerElem, termEvents) {
 		    .appendTo(Player.container);
 
 		Player.term = new Terminal({
-			cols: 80,
-			rows: 24
+			rows: termInfo.rows,
+			cols: termInfo.cols
 		});
 		Player.term.open(Player.termContainer[0]);
 
@@ -187,5 +187,5 @@ var player = function(audioFile, containerElem, termEvents) {
 		return Player;
 	}
 
-	return init(audioFile, containerElem, termEvents);
+	return init(audioFile, containerElem, termEvents, termInfo);
 }
