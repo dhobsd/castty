@@ -48,7 +48,7 @@ done(void)
 	} else {
 		(void) tcsetattr(0, TCSAFLUSH, &tt);
 
-		exit(0);
+		exit(EXIT_SUCCESS);
 	}
 }
 
@@ -63,17 +63,17 @@ fail(void)
 static void
 doinput(int masterfd)
 {
-	char ibuf[BUFSIZ];
+	unsigned char ibuf[BUFSIZ];
 	ssize_t cc;
 
 	/* Read input from stdin and write it to our master pty handle */
 	while ((cc = read(STDIN_FILENO, ibuf, BUFSIZ)) > 0) {
-		if (write(masterfd, ibuf, cc)) {
+		if (write(masterfd, ibuf, cc) < 0) {
 			perror("write");
 		}
 	}
 
-	done();
+	exit(EXIT_SUCCESS);
 }
 
 static void
