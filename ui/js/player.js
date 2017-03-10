@@ -65,15 +65,10 @@ var player = function(audioFile, containerElem, termEvents) {
 		}
 
 		Player.updateSeeker = function() {
-			var v = + Player.seeker.val();
-			var n = Date.now();
-			var d = n - Player.start;
-
 			Player.seekUpdate = 1;
-			Player.seeker.val(d + v).change();
+			Player.seeker.val(100 + Player.audio.currentTime * 1000 +
+			    ((Player.audio.currentTime * 1000) % 100)).change();
 			Player.seekUpdate = 0;
-
-			Player.start = n;
 
 			Player.seekerHandle = setTimeout(Player.updateSeeker, 100);
 		}
