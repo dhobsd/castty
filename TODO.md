@@ -33,3 +33,6 @@ on exit or through another tool.
 Curses-style control UI with `screen` or `tmux` style keybindings.
 
 Editing functionality (simple cut, move, sync)
+
+Add livecasting functionality to the player and recorder. (This will almost
+definitely require some kind of real-time transcoding support.)
