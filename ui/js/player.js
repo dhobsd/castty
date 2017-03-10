@@ -82,8 +82,13 @@ var player = function(audioFile, containerElem, termEvents) {
 			.appendTo(Player.controls);
 
 		Player.paused = 1;
+		Player.ended = 0;
 		Player.toggle.click(function() {
 			if (Player.startable) {
+				if (Player.ended) {
+					Player.term.clear();
+				}
+
 				if (Player.paused) {
 					Player.paused = 0;
 					Player.toggle.text("\u25b6");
@@ -153,7 +158,24 @@ var player = function(audioFile, containerElem, termEvents) {
 		});
 
 		Player.audio = new Audio(audioFile);
-		$(Player.audio).on('durationchange', function(x) {
+		$(Player.audio).on('ended', function () {
+			Player.seekUpdate = 1;
+			Player.seeker.val(Player.duration).change();
+			Player.seekUpdate = 0;
+
+			Player.ended = 1;
+			Player.paused = 1;
+			Player.rem = 0;
+			Player.eventOff = 0;
+			Player.toggle.text("\u21ba");
+
+			clearTimeout(Player.timerHandle);
+			clearTimeout(Player.seekerHandle);
+			Player.timerHandle = undefined;
+			Player.seekerHandle = undefined;
+		});
+
+		$(Player.audio).on('durationchange', function() {
 			Player.maxSeek = Player.audio.duration;
 		});
 
