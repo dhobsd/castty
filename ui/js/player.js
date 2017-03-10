@@ -87,6 +87,10 @@ var player = function(audioFile, containerElem, termEvents) {
 			if (Player.startable) {
 				if (Player.ended) {
 					Player.term.clear();
+					Player.seekUpdate = 1;
+					Player.seeker.val(0).change();
+					Player.seekUpdate = 0;
+					Player.ended = 0;
 				}
 
 				if (Player.paused) {
