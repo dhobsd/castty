@@ -31,11 +31,13 @@ static struct command {
 static void
 handle_command(void)
 {
+
 	return;
 }
 
 void
-outputproc(int masterfd, int controlfd, char *outfn, int append, int rows, int cols)
+outputproc(int masterfd, int controlfd, const char *outfn, const char *audioout,
+    int append, int rows, int cols)
 {
 	static struct timeval prev, now;
 	struct pollfd pollfds[2];
@@ -46,10 +48,14 @@ outputproc(int masterfd, int controlfd, char *outfn, int append, int rows, int c
 	FILE *evout;
 	int cc;
 
+	if (audioout) {
+		audio_start(audioout, append);
+	}
+
 	evout = fopen(outfn, append ? "ab" : "wb");
 	if (evout == NULL) {
 		perror("fopen");
-		exit(EXIT_FAILURE);
+		goto end;
 	}
 
 	setbuf(evout, NULL);
@@ -81,13 +87,17 @@ outputproc(int masterfd, int controlfd, char *outfn, int append, int rows, int c
 	pollfds[1].events = POLLIN;
 	pollfds[1].revents = 0;
 
+	if (audioout) {
+		audio_toggle();
+	}
+
 	for (;;) {
 		int nready;
 
 		nready = poll(pollfds, 2, -1);
 		if (nready == -1) {
 			perror("poll");
-			exit(EXIT_FAILURE);
+			goto end;
 		}
 
 		for (int i = 0; i < 2; i++) {
@@ -103,10 +113,15 @@ outputproc(int masterfd, int controlfd, char *outfn, int append, int rows, int c
 				unsigned char *epos;
 
 				if (command.off == 0) {
-					printf("\x1b" "7\x1b[0;37;1;40m");
+					printf("\x1b" "7\x1b[0;37;1;40m<cmd> ");
 				}
 
-				cc = read(controlfd, command.cmdbuf + command.off, sizeof command.cmdbuf - command.off);
+				cc = read(controlfd, command.cmdbuf + command.off,
+				    sizeof command.cmdbuf - command.off);
+				if (cc == -1) {
+					perror("read");
+					goto end;
+				}
 
 				epos = memchr(command.cmdbuf + command.off, '\r', cc);
 				if (!epos) {
@@ -123,7 +138,7 @@ outputproc(int masterfd, int controlfd, char *outfn, int append, int rows, int c
 				assert(command.off < sizeof command.cmdbuf);
 
 				if (command.cmdbuf[command.off - 1] == '\r' ||
-						command.cmdbuf[command.off - 1] == '\n') {
+				    command.cmdbuf[command.off - 1] == '\n') {
 					printf("\x1b" "8\x1b" "0\x1b[K");
 					handle_command();
 					command.off = 0;
@@ -172,10 +187,16 @@ outputproc(int masterfd, int controlfd, char *outfn, int append, int rows, int c
 	}
 
 end:
+	if (audioout) {
+		audio_deinit();
+	}
+
 	/* Empty last record */
 	fprintf(evout, "\"s\":%0.3f,\"e\":\"\"}];", dur);
 	fflush(evout);
 
 	xfclose(evout);
 	xclose(masterfd);
+
+	return;
 }

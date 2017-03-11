@@ -2,9 +2,9 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <stdint.h>
-#include <unistd.h>
 
 #include <pthread.h>
+#include <unistd.h>
 
 #include <ck_ring.h>
 #include <portaudio.h>
@@ -37,7 +37,7 @@ writer(void *priv)
 {
 	(void)priv;
 
-	__sync_fetch_and_sub(&post, 1);
+	ck_pr_sub_int(&post, 1);
 	while (post > 0) {
 		usleep(1000);
 	}
@@ -72,7 +72,7 @@ audio_record(const void *ibuf, void *obuf, unsigned long frames,
 	(void)sflags;
 	(void)opaque;
 
-	for (unsigned long i = 0; i < frames * 2; i++) {
+	for (unsigned long i = 0; i < frames * inParams.channelCount; i++) {
 		intptr_t v = buf[i];
 		ck_ring_enqueue_spsc(&buffer.ring, buffer.b, (void *)v);
 	}
@@ -99,59 +99,8 @@ reader(void *v)
 
 	(void) v;
 
-	err = Pa_Initialize();
-	if (err != paNoError) {
-		fprintf(stderr, "Pa_Initialize: %s\n", Pa_GetErrorText(err));
-		exit(EXIT_FAILURE);
-	}
-
-	int ndev;
-
-	ndev = Pa_GetDeviceCount();
-	if (ndev < 0) {
-		fprintf(stderr, "Pa_GetDeviceCount: %s\n",
-		    Pa_GetErrorText(err));
-		exit(EXIT_FAILURE);
-	} else if (ndev == 0) {
-		fprintf(stderr, "No audio devices found!\n");
-		exit(EXIT_FAILURE);
-	}
-
-	while (1) {
-		int d;
-
-		for (int i = 0; i < ndev; i++) {
-			const PaDeviceInfo *dev;
-
-			dev = Pa_GetDeviceInfo(i);
-			if (dev->maxInputChannels) {
-				printf("%d:\t%s (%d ch)\n", i, dev->name,
-				    dev->maxInputChannels);
-			}
-		}
-
-		printf("Select input device: ");
-		fflush(stdout);
-
-		int r = scanf("%d", &d);
-		if (r != 1) {
-			perror("scanf");
-			exit(EXIT_FAILURE);
-		}
-
-		if (d > ndev) {
-			fprintf(stderr, "Invalid selection\n");
-		}
-		cdev = Pa_GetDeviceInfo(d);
-		if (!cdev->maxInputChannels) {
-			fprintf(stderr, "Invalid selection\n");
-		} else {
-			break;
-		}
-	}
-
 	/* 44100Hz * 16 bit samples * 2 channels */
-	buffer.b = calloc(np2(44100 * 4), sizeof buffer.b);
+	buffer.b = calloc(np2(44100 * 4), sizeof (int64_t));
 	if (buffer.b == NULL) {
 		fprintf(stderr, "Couldn't allocate ring buffer\n");
 		exit(EXIT_FAILURE);
@@ -170,7 +119,7 @@ reader(void *v)
 		exit(EXIT_FAILURE);
 	}
 
-	__sync_fetch_and_sub(&post, 1);
+	ck_pr_sub_int(&post, 1);
 	while (post > 0 || record == 0) {
 		usleep(10);
 	}
@@ -226,10 +175,19 @@ audio_toggle(void)
 }
 
 void
-audio_init(const char *file, int flag)
+audio_start(const char *outfile, int append)
 {
+	PaError err;
 
-	buffer.file = fopen(file, flag ? "ab" : "wb");
+	err = Pa_Initialize();
+	if (err != paNoError) {
+		fprintf(stderr, "Pa_Initialize: %s\n", Pa_GetErrorText(err));
+		exit(EXIT_FAILURE);
+	}
+
+	cdev = Pa_GetDeviceInfo(Pa_GetDefaultInputDevice());
+
+	buffer.file = fopen(outfile, append ? "ab" : "wb");
 	if (buffer.file == NULL) {
 		perror("fopen");
 		exit(EXIT_FAILURE);

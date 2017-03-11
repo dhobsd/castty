@@ -8,12 +8,12 @@
 
 #include <termios.h>
 
-void audio_init(const char *, int);
+void audio_start(const char *, int);
 void audio_toggle(void);
 void audio_deinit(void);
 
 void inputproc(int, int);
-void outputproc(int, int, char *, int, int, int);
+void outputproc(int, int, const char *, const char *, int, int, int);
 void shellproc(const char *, const char *, struct winsize *, struct termios *, int);
 
 void xclose(int);

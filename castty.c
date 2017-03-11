@@ -98,10 +98,6 @@ main(int argc, char **argv)
 		outfile = "events.js";
 	}
 
-	if (rflg) {
-		audio_init(rflg, aflg);
-	}
-
 	if (pipe(controlfd) != 0) {
 		perror("pipe");
 		exit(EXIT_FAILURE);
@@ -147,8 +143,8 @@ main(int argc, char **argv)
 		if (subchild) {
 			/* Handle output to file in parent */
 			xclose(controlfd[1]);
-			outputproc(masterfd, controlfd[0], outfile, aflg, win.ws_row,
-			    win.ws_col);
+			outputproc(masterfd, controlfd[0], outfile, rflg, aflg,
+			    win.ws_row, win.ws_col);
 		} else {
 			char *shell = getenv("SHELL");
 			if (shell == NULL) {
@@ -166,15 +162,7 @@ main(int argc, char **argv)
 
 	xclose(controlfd[0]);
 
-	if (rflg) {
-		audio_toggle();
-	}
-
 	inputproc(masterfd, controlfd[1]);
-
-	if (rflg) {
-		audio_deinit();
-	}
 
 	return 0;
 }
