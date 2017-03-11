@@ -12,6 +12,39 @@
 
 #include "castty.h"
 
+struct cmdinput {
+	char buf[BUFSIZ];
+	unsigned off;
+};
+
+enum command {
+	CMD_MUTE,
+	CMD_PAUSE,
+	CMD_NONE,
+};
+
+struct {
+	enum command cmd;
+	char *str;
+} commands[] = {
+	{ CMD_MUTE, ":mute", },
+	{ CMD_PAUSE, ":pause", },
+};
+
+static enum command
+get_command(struct cmdinput *cmd)
+{
+
+	for (unsigned i = 0; i < sizeof commands / sizeof commands[0]; i++) {
+		if (strcmp(commands[i].str, cmd->buf) == 0) {
+			return commands[i].cmd;
+		}
+	}
+
+	return CMD_NONE;
+}
+
+
 static double
 time_delta(struct timeval *prev, struct timeval *now)
 {
@@ -23,24 +56,13 @@ time_delta(struct timeval *prev, struct timeval *now)
 	return nms - pms;
 }
 
-static struct cmdinput {
-	unsigned char buf[BUFSIZ];
-	unsigned off;
-} cmd;
-
-static void
-handle_command(void)
-{
-
-	return;
-}
-
 void
 outputproc(int masterfd, int controlfd, const char *outfn, const char *audioout,
     int append, int rows, int cols)
 {
 	static struct timeval prev, now;
 	struct pollfd pollfds[2];
+	struct cmdinput cmd;
 	static double dur;
 	char obuf[BUFSIZ];
 	int paused = 0;
@@ -87,8 +109,10 @@ outputproc(int masterfd, int controlfd, const char *outfn, const char *audioout,
 	pollfds[1].events = POLLIN;
 	pollfds[1].revents = 0;
 
+	cmd.off = 0;
+
 	if (audioout) {
-		audio_toggle();
+		audio_toggle_pause();
 	}
 
 	for (;;) {
@@ -110,7 +134,7 @@ outputproc(int masterfd, int controlfd, const char *outfn, const char *audioout,
 			}
 
 			if (pollfds[i].fd == controlfd) {
-				unsigned char *epos;
+				char *epos;
 
 				if (cmd.off == 0) {
 					printf("\x1b" "7\x1b[0;37;1;40m<cmd> ");
@@ -127,7 +151,7 @@ outputproc(int masterfd, int controlfd, const char *outfn, const char *audioout,
 				if (!epos) {
 					printf("%.*s", cc, cmd.buf + cmd.off);
 				} else {
-					unsigned char *p = cmd.buf + cmd.off;
+					char *p = cmd.buf + cmd.off;
 
 					while (p < epos) {
 						fputc(*p++, stdout);
@@ -138,9 +162,34 @@ outputproc(int masterfd, int controlfd, const char *outfn, const char *audioout,
 				assert(cmd.off < sizeof cmd.buf);
 
 				if (cmd.buf[cmd.off - 1] == '\r') {
-					printf("\x1b" "8\x1b" "0\x1b[K");
-					handle_command();
+					enum command command;
+
+					cmd.buf[cmd.off - 1] = '\0';
 					cmd.off = 0;
+
+					command = get_command(&cmd);
+					switch (command) {
+					case CMD_MUTE:
+						audio_toggle_mute();
+						break;
+
+					case CMD_PAUSE:
+						paused = !paused;
+						audio_toggle_pause();
+						if (!paused) {
+							gettimeofday(&prev, NULL);
+							now = prev;
+						}
+						break;
+
+					case CMD_NONE:
+						break;
+
+					default:
+						abort();
+					}
+
+					printf("\x1b" "8\x1b" "0\x1b[K");
 				}
 			} else if (pollfds[i].fd == masterfd) {
 				cc = read(masterfd, obuf, BUFSIZ);
@@ -187,7 +236,7 @@ outputproc(int masterfd, int controlfd, const char *outfn, const char *audioout,
 
 end:
 	if (audioout) {
-		audio_deinit();
+		audio_stop();
 	}
 
 	/* Empty last record */

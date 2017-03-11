@@ -28,7 +28,8 @@ struct data {
 } buffer;
 
 static int post = 2;
-static int record;
+static int recording;
+static int muted;
 
 pthread_t wthread, rthread;
 
@@ -46,7 +47,7 @@ writer(void *priv)
 		intptr_t v;
 
 		if (ck_ring_dequeue_spsc(&buffer.ring, buffer.b, &v)) {
-			int16_t av = (int16_t)v;
+			int16_t av = muted ? INT16_C(0) : (int16_t)v;
 			fwrite(&av, sizeof av, 1, buffer.file);
 		} else {
 			usleep(2000);
@@ -120,7 +121,7 @@ reader(void *v)
 	}
 
 	ck_pr_sub_int(&post, 1);
-	while (post > 0 || record == 0) {
+	while (post > 0 || recording == 0) {
 		usleep(10);
 	}
 
@@ -131,7 +132,7 @@ reader(void *v)
 	}
 
 	while (1) {
-		if (record == 0 && Pa_IsStreamActive(stream) == 1) {
+		if (recording == 0 && Pa_IsStreamActive(stream) == 1) {
 			err = Pa_StopStream(stream);
 
 			if (err != paNoError) {
@@ -139,7 +140,7 @@ reader(void *v)
 				    Pa_GetErrorText(err));
 				exit(EXIT_FAILURE);
 			}
-		} else if (record == 1 && Pa_IsStreamStopped(stream) == 1) {
+		} else if (recording == 1 && Pa_IsStreamStopped(stream) == 1) {
 			err = Pa_StartStream(stream);
 
 			if (err != paNoError) {
@@ -169,9 +170,15 @@ reader(void *v)
 }
 
 void
-audio_toggle(void)
+audio_toggle_pause(void)
 {
-	record = !record;
+	recording = !recording;
+}
+
+void
+audio_toggle_mute(void)
+{
+	muted = !muted;
 }
 
 void
@@ -209,7 +216,7 @@ audio_start(const char *outfile, int append)
 }
 
 void
-audio_deinit(void)
+audio_stop(void)
 {
 	PaError err;
 

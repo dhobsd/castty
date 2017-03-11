@@ -9,8 +9,10 @@
 #include <termios.h>
 
 void audio_start(const char *, int);
-void audio_toggle(void);
-void audio_deinit(void);
+void audio_toggle_pause(void);
+void audio_toggle_mute(void);
+void audio_mute(void);
+void audio_stop(void);
 
 void inputproc(int, int);
 void outputproc(int, int, const char *, const char *, int, int, int);
