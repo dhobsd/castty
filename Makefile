@@ -5,8 +5,8 @@ TARGET = castty
 
 all: $(TARGET)
 
-castty: castty.o audio.o
-	$(CC) $(CFLAGS) -o castty castty.o audio.o -L/usr/local/lib -lportaudio -lpthread
+castty: audio.o castty.o input.o output.o shell.o xwrap.o
+	$(CC) $(CFLAGS) -o castty $^ -L/usr/local/lib -lportaudio -lpthread
 
 clean:
 	rm -f *.o $(TARGET) 
