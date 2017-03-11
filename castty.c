@@ -275,10 +275,6 @@ main(int argc, char **argv)
 		fname = "events.js";
 	}
 
-	if (rflg) {
-		audio_init(rflg, aflg);
-	}
-
 	fscript = efopen(fname, aflg ? "ab" : "wb");
 	setbuf(fscript, NULL);
 
@@ -309,6 +305,10 @@ main(int argc, char **argv)
 		}
 
 		if (subchild) {
+			if (rflg) {
+				audio_init(rflg, aflg);
+			}
+
 			/* Handle output to file in parent */
 			dooutput();
 		} else {
