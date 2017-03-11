@@ -23,10 +23,10 @@ time_delta(struct timeval *prev, struct timeval *now)
 	return nms - pms;
 }
 
-static struct command {
-	unsigned char cmdbuf[BUFSIZ];
+static struct cmdinput {
+	unsigned char buf[BUFSIZ];
 	unsigned off;
-} command;
+} cmd;
 
 static void
 handle_command(void)
@@ -112,36 +112,35 @@ outputproc(int masterfd, int controlfd, const char *outfn, const char *audioout,
 			if (pollfds[i].fd == controlfd) {
 				unsigned char *epos;
 
-				if (command.off == 0) {
+				if (cmd.off == 0) {
 					printf("\x1b" "7\x1b[0;37;1;40m<cmd> ");
 				}
 
-				cc = read(controlfd, command.cmdbuf + command.off,
-				    sizeof command.cmdbuf - command.off);
+				cc = read(controlfd, cmd.buf + cmd.off,
+				    sizeof cmd.buf - cmd.off);
 				if (cc == -1) {
 					perror("read");
 					goto end;
 				}
 
-				epos = memchr(command.cmdbuf + command.off, '\r', cc);
+				epos = memchr(cmd.buf + cmd.off, '\r', cc);
 				if (!epos) {
-					printf("%.*s", cc, command.cmdbuf + command.off);
+					printf("%.*s", cc, cmd.buf + cmd.off);
 				} else {
-					unsigned char *p = command.cmdbuf + command.off;
+					unsigned char *p = cmd.buf + cmd.off;
 
 					while (p < epos) {
 						fputc(*p++, stdout);
 					}
 				}
 
-				command.off += cc;
-				assert(command.off < sizeof command.cmdbuf);
+				cmd.off += cc;
+				assert(cmd.off < sizeof cmd.buf);
 
-				if (command.cmdbuf[command.off - 1] == '\r' ||
-				    command.cmdbuf[command.off - 1] == '\n') {
+				if (cmd.buf[cmd.off - 1] == '\r') {
 					printf("\x1b" "8\x1b" "0\x1b[K");
 					handle_command();
-					command.off = 0;
+					cmd.off = 0;
 				}
 			} else if (pollfds[i].fd == masterfd) {
 				cc = read(masterfd, obuf, BUFSIZ);
