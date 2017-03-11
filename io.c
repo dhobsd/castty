@@ -8,57 +8,7 @@
 #include <string.h>
 #include <unistd.h>
 
-#include "endian.h"
 #include "castty.h"
-
-int
-read_header(FILE *fp, Header *h)
-{
-	uint32_t buf[3];
-
-	if (fread(buf, sizeof buf, 1, fp) == 0) {
-		return 0;
-	}
-
-	h->tv.tv_sec	= le32toh(buf[0]);
-	h->tv.tv_usec	= le32toh(buf[1]);
-	h->len		= le32toh(buf[2]);
-
-	return 1;
-}
-
-int
-write_header(FILE *fp, Header *h)
-{
-	static struct timeval first;
-	static double fms;
-
-	struct timeval now;
-	double nms;
-
-	if (first.tv_sec == 0) {
-		first = h->tv;
-		fms = (double)(first.tv_sec * 1000) + ((double)first.tv_usec / 1000.);
-		now = first;
-		fputs("var _tre=[{", fp);
-	} else {
-		now = h->tv;
-		fputs("\"},{", fp);
-	}
-
-	nms = (double)(now.tv_sec * 1000) + ((double)now.tv_usec / 1000.);
-
-	fprintf(fp, "\"s\":%0.3f,\"e\":\"", nms - fms);
-
-	return 1;
-}
-
-static char *progname = "";
-void
-set_progname(const char *name)
-{
-	progname = strdup(name);
-}
 
 FILE *
 efopen(const char *path, const char *mode)

@@ -3,6 +3,7 @@
 
 #include <sys/types.h>
 #include <sys/ioctl.h>
+#include <sys/time.h>
 #include <sys/wait.h>
 
 #include <ctype.h>
@@ -36,13 +37,6 @@ done(void)
 {
 
 	if (subchild) {
-		Header h;
-
-		gettimeofday(&h.tv, NULL);
-		fflush(fscript);
-		(void) write_header(fscript, &h);
-		fputs("\"}];", fscript);
-
 		(void) fclose(fscript);
 		(void) close(master);
 	} else {
@@ -129,36 +123,57 @@ finish(int sig)
 	}
 }
 
+static double
+time_delta(struct timeval *prev, struct timeval *now)
+{
+	double pms, nms;
+
+	pms = (double)(prev->tv_sec * 1000) + ((double)prev->tv_usec / 1000.);
+	nms = (double)(now->tv_sec * 1000) + ((double)now->tv_usec / 1000.);
+
+	return nms - pms;
+}
+
 static void
 dooutput(void)
 {
-	int cc;
+	static struct timeval prev, now;
+	static double dur;
 	char obuf[BUFSIZ];
+	int first = 1;
+	int cc;
 
 	setbuf(stdout, NULL);
 	(void) close(0);
 
 	fprintf(fscript, "var _ti={\"rows\":%hd,\"cols\":%hd};\n",
 	    win.ws_row, win.ws_col);
+	fputs("var _tre=[{", fscript);
 
 	for (;;) {
-		Header h;
-
 		cc = read(master, obuf, BUFSIZ);
 		if (cc <= 0) {
 			break;
 		}
 
-		h.len = cc;
+		if (first) {
+			gettimeofday(&prev, NULL);
+			now = prev;
+			first = 0;
+		} else {
+			gettimeofday(&now, NULL);
+		}
 
-		gettimeofday(&h.tv, NULL);
+		dur += time_delta(&prev, &now);
+		prev = now;
 
 		if (write(1, obuf, cc) < 0) {
 			perror("write");
 			done();
 		}
 
-		write_header(fscript, &h);
+		fprintf(fscript, "\"s\":%0.3f,\"e\":\"", dur);
+
 		for (int i = 0; i < cc; i++) {
 			switch (obuf[i]) {
 			case '"':
@@ -173,7 +188,12 @@ dooutput(void)
 				break;
 			}
 		}
+		fputs("\"},{", fscript);
 	}
+
+	/* Empty last record */
+	fprintf(fscript, "\"s\":%0.3f,\"e\":\"\"}];", dur);
+	fflush(fscript);
 
 	done();
 }
