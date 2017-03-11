@@ -61,20 +61,16 @@ fixtty(void)
 int
 main(int argc, char **argv)
 {
-	int ch, aflg, masterfd, controlfd[2];
 	char *exec_cmd, *rflg, *outfile;
+	int ch, masterfd, controlfd[2];
 	extern char *optarg;
 	struct winsize win;
 	extern int optind;
 
-	aflg = 0;
 	exec_cmd = rflg = NULL;
 
-	while ((ch = getopt(argc, argv, "aue:h?r:")) != EOF) {
+	while ((ch = getopt(argc, argv, "ue:h?r:")) != EOF) {
 		switch ((char)ch) {
-		case 'a':
-			aflg++;
-			break;
 		case 'e':
 			exec_cmd = strdup(optarg);
 			break;
@@ -143,7 +139,7 @@ main(int argc, char **argv)
 		if (subchild) {
 			/* Handle output to file in parent */
 			xclose(controlfd[1]);
-			outputproc(masterfd, controlfd[0], outfile, rflg, aflg,
+			outputproc(masterfd, controlfd[0], outfile, rflg, 0,
 			    win.ws_row, win.ws_col);
 		} else {
 			char *shell = getenv("SHELL");
