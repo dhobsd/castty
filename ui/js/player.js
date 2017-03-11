@@ -90,7 +90,7 @@ var player = function(audioFile, containerElem, termEvents, termInfo) {
 
 				if (Player.paused) {
 					Player.paused = 0;
-					Player.toggle.text("\u25b6");
+					Player.toggle.text("\u23f8");
 					Player.start = Date.now();
 					Player.audio.play();
 					Player.timerHandle =
@@ -108,7 +108,7 @@ var player = function(audioFile, containerElem, termEvents, termInfo) {
 						    getTimeout(Player.timerHandle);
 						clearTimeout(Player.timerHandle);
 					}
-					Player.toggle.text("\u23f8");
+					Player.toggle.text("\u25b6");
 					Player.paused = 1;
 				}
 			}
@@ -180,7 +180,7 @@ var player = function(audioFile, containerElem, termEvents, termInfo) {
 
 		$(Player.audio).on('canplaythrough', function() {
 			Player.startable = 1;
-			Player.toggle.text('\u23f8');
+			Player.toggle.text('\u25b6');
 			Player.toggle.prop('disabled', false);
 		});
 
