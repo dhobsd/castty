@@ -283,6 +283,10 @@ main(int argc, char **argv)
 		shell = "/bin/sh";
 	}
 
+	if (rflg) {
+		audio_init(rflg, aflg);
+	}
+
 	(void) tcgetattr(0, &tt);
 	master = posix_openpt(O_RDWR | O_NOCTTY);
 	(void) ioctl(0, TIOCGWINSZ, (char *)&win);
@@ -305,10 +309,6 @@ main(int argc, char **argv)
 		}
 
 		if (subchild) {
-			if (rflg) {
-				audio_init(rflg, aflg);
-			}
-
 			/* Handle output to file in parent */
 			dooutput();
 		} else {
