@@ -141,10 +141,7 @@ dooutput(void)
 		dur += time_delta(&prev, &now);
 		prev = now;
 
-		if (write(1, obuf, cc) < 0) {
-			perror("write");
-			done();
-		}
+		do_write(STDOUT_FILENO, obuf, cc);
 
 		fprintf(fscript, "\"s\":%0.3f,\"e\":\"", dur);
 
