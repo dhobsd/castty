@@ -32,6 +32,28 @@ static struct	winsize win;
 static int	aflg;
 static char	*rflg;
 
+static FILE *
+efopen(const char *path, const char *mode)
+{
+	FILE *fp = fopen(path, mode);
+	if (fp == NULL) {
+		perror("fopen");
+		exit(EXIT_FAILURE);
+	}
+	return fp;
+}
+
+static int
+edup2(int oldfd, int newfd)
+{
+	int fd = dup2(oldfd, newfd);
+	if (fd == -1) {
+		perror("dup2");
+		exit(EXIT_FAILURE);
+	}
+	return fd;
+}
+
 static void
 done(void)
 {
@@ -41,9 +63,9 @@ done(void)
 		(void) close(master);
 	} else {
 		(void) tcsetattr(0, TCSAFLUSH, &tt);
-
-		exit(EXIT_SUCCESS);
 	}
+
+	exit(EXIT_SUCCESS);
 }
 
 static void
@@ -187,9 +209,9 @@ doshell(const char* command)
 
 	(void) close(master);
 	(void) fclose(fscript);
-	(void) dup2(slave, 0);
-	(void) dup2(slave, 1);
-	(void) dup2(slave, 2);
+	edup2(slave, 0);
+	edup2(slave, 1);
+	edup2(slave, 2);
 	(void) close(slave);
 
 	if (!command) {
@@ -257,10 +279,7 @@ main(int argc, char **argv)
 		audio_init(rflg, aflg);
 	}
 
-	if ((fscript = fopen(fname, aflg ? "ab" : "wb")) == NULL) {
-		perror(fname);
-		fail();
-	}
+	fscript = efopen(fname, aflg ? "ab" : "wb");
 	setbuf(fscript, NULL);
 
 	shell = getenv("SHELL");
