@@ -33,9 +33,9 @@ static int record;
 pthread_t wthread, rthread;
 
 static void *
-writer(void *v)
+writer(void *priv)
 {
-	(void)v;
+	(void)priv;
 
 	__sync_fetch_and_sub(&post, 1);
 	while (post > 0) {
