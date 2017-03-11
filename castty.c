@@ -190,7 +190,7 @@ time_delta(struct timeval *prev, struct timeval *now)
 
 static struct command {
 	unsigned char cmdbuf[BUFSIZ];
-	int off;
+	unsigned off;
 } command;
 
 static void
@@ -229,11 +229,12 @@ dooutput(void)
 	f = fcntl(controlfd[0], F_GETFL);
 	fcntl(controlfd[0], F_SETFL, f | O_NONBLOCK);
 
-	pollfds[0].fd = master;
+	/* Control descriptor is highest priority */
+	pollfds[0].fd = controlfd[0];
 	pollfds[0].events = POLLIN;
 	pollfds[0].revents = 0;
 
-	pollfds[1].fd = controlfd[0];
+	pollfds[1].fd = master;
 	pollfds[1].events = POLLIN;
 	pollfds[1].revents = 0;
 
@@ -255,7 +256,6 @@ dooutput(void)
 				continue;
 			}
 
-			/* Control descriptor is highest priority */
 			if (pollfds[i].fd == controlfd[0]) {
 				unsigned char *epos;
 
@@ -266,10 +266,6 @@ dooutput(void)
 				cc = read(controlfd[0], command.cmdbuf + command.off, sizeof command.cmdbuf - command.off);
 
 				epos = memchr(command.cmdbuf + command.off, '\r', cc);
-				if (epos == NULL) {
-					epos = memchr(command.cmdbuf + command.off, '\n', cc);
-				}
-
 				if (!epos) {
 					printf("%.*s", cc, command.cmdbuf + command.off);
 				} else {
