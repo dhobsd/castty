@@ -6,6 +6,7 @@
 #include <sys/time.h>
 #include <sys/wait.h>
 
+#include <assert.h>
 #include <ctype.h>
 #include <fcntl.h>
 #include <stdio.h>
@@ -66,9 +67,9 @@ done(void)
 		(void) close(master);
 	} else {
 		(void) tcsetattr(0, TCSAFLUSH, &tt);
+		exit(EXIT_SUCCESS);
 	}
 
-	exit(EXIT_SUCCESS);
 }
 
 static void
@@ -92,11 +93,65 @@ do_write(int fd, void *buf, size_t len)
 static void
 doinput(int masterfd)
 {
-	unsigned char ibuf[BUFSIZ];
+	unsigned char ibuf[BUFSIZ], *p;
+	enum input_state {
+		STATE_PASSTHROUGH,
+		STATE_COMMAND,
+	} input_state;
 	ssize_t cc;
 
+	input_state = STATE_PASSTHROUGH;
+
 	while ((cc = read(STDIN_FILENO, ibuf, BUFSIZ)) > 0) {
-		do_write(masterfd, ibuf, cc);
+		unsigned char *cmdstart;
+		unsigned char *cmdend;
+
+		p = ibuf;
+
+		cmdstart = memchr(ibuf, 0x01, cc);
+		if (cmdstart) {
+			switch (input_state) {
+			case STATE_PASSTHROUGH:
+				/* Switching into command mode: pass through anything
+				 * preceding our command
+				 */
+				if (cmdstart > ibuf) {
+					do_write(masterfd, ibuf, cmdstart - ibuf);
+				}
+				cmdstart++;
+				cc -= (cmdstart - ibuf);
+
+				p = cmdstart;
+				input_state = STATE_COMMAND;
+
+				break;
+			case STATE_COMMAND:
+				break;
+			}
+		}
+
+		switch (input_state) {
+		case STATE_PASSTHROUGH:
+			do_write(masterfd, ibuf, cc);
+			break;
+
+		case STATE_COMMAND:
+			cmdend = memchr(p, '\r', cc);
+			if (cmdend) {
+				do_write(controlfd[1], p, cmdend - p + 1);
+				cmdend++;
+
+				if (cmdend - p + 1 < cc) {
+					do_write(masterfd, p + 1, cc - (cmdend - p));
+				}
+
+				input_state = STATE_PASSTHROUGH;
+			} else {
+				do_write(controlfd[1], p, cc);
+			}
+			break;
+		}
+
 	}
 
 	exit(EXIT_SUCCESS);
@@ -133,6 +188,11 @@ time_delta(struct timeval *prev, struct timeval *now)
 	return nms - pms;
 }
 
+static struct command {
+	unsigned char cmdbuf[BUFSIZ];
+	int off;
+} command;
+
 static void
 dooutput(void)
 {
@@ -147,15 +207,29 @@ dooutput(void)
 	setbuf(stdout, NULL);
 	(void) close(0);
 
-	fprintf(fscript, "var _ti={\"rows\":%hd,\"cols\":%hd};\n",
-	    win.ws_row, win.ws_col);
+	/* Clear screen */
+	printf("\x1b[2J");
+
+	/* Move cursor to top-left */
+	printf("\x1b[H");
+
+	fprintf(fscript, "var _ti={\"rows\":%d,\"cols\":%d};\n",
+	    win.ws_row - 1, win.ws_col);
 	fputs("var _tre=[{", fscript);
 
+	int f = fcntl(master, F_GETFL);
+	fcntl(master, F_SETFL, f | O_NONBLOCK);
+
+	f = fcntl(controlfd[0], F_GETFL);
+	fcntl(controlfd[0], F_SETFL, f | O_NONBLOCK);
+
 	pollfds[0].fd = master;
-	pollfds[0].events = (POLLIN | POLLERR | POLLHUP);
+	pollfds[0].events = POLLIN;
+	pollfds[0].revents = 0;
 
 	pollfds[1].fd = controlfd[0];
-	pollfds[1].events = (POLLIN | POLLERR | POLLHUP);
+	pollfds[1].events = POLLIN;
+	pollfds[1].revents = 0;
 
 	for (;;) {
 		int nready;
@@ -166,41 +240,53 @@ dooutput(void)
 			exit(EXIT_FAILURE);
 		}
 
-		for (int i = 0; i < nready; i++) {
-			if ((pollfds[i].revents & (POLLHUP | POLLERR))) {
+		for (int i = 0; i < 2; i++) {
+			if ((pollfds[i].revents & (POLLHUP | POLLERR | POLLNVAL))) {
 				goto end;
+			}
+
+			if (!(pollfds[i].revents & POLLIN)) {
+				continue;
 			}
 
 			/* Control descriptor is highest priority */
 			if (pollfds[i].fd == controlfd[0]) {
-				unsigned char code;
+				unsigned char *epos;
 
-				cc = read(controlfd[0], &code, 1);
-				if (cc != 1) {
-					perror("read");
-					exit(EXIT_FAILURE);
+				if (command.off == 0) {
+					printf("\x1b" "7\x1b[0;37;1;40m");
 				}
 
-				switch (code) {
-				case 0:
-					audio_toggle();
-					paused = !paused;
+				cc = read(controlfd[0], command.cmdbuf + command.off, sizeof command.cmdbuf - command.off);
 
-					/* If we're unpausing, try not to add anything much */
-					if (!paused) {
-						gettimeofday(&now, NULL);
-						prev = now;
+				epos = memchr(command.cmdbuf + command.off, '\r', cc);
+				if (epos == NULL) {
+					epos = memchr(command.cmdbuf + command.off, '\n', cc);
+				}
+
+				if (!epos) {
+					printf("%.*s", cc, command.cmdbuf + command.off);
+				} else {
+					unsigned char *p = command.cmdbuf + command.off;
+
+					while (p < epos) {
+						fputc(*p++, stdout);
 					}
+				}
 
-					break;
-				default:
-					fprintf(stdout, "Invalid code: %02x\r\n", code);
-					exit(EXIT_FAILURE);
+				command.off += cc;
+				assert(command.off < sizeof command.cmdbuf);
+
+				if (command.cmdbuf[command.off - 1] == '\r' ||
+				    command.cmdbuf[command.off - 1] == '\n') {
+					printf("\x1b" "8\x1b" "0\x1b[K");
+					handle_command();
+					command.off = 0;
 				}
 			} else if (pollfds[i].fd == master) {
 				cc = read(master, obuf, BUFSIZ);
 				if (cc <= 0) {
-					break;
+					goto end;
 				}
 
 				do_write(STDOUT_FILENO, obuf, cc);
@@ -245,11 +331,15 @@ end:
 	fprintf(fscript, "\"s\":%0.3f,\"e\":\"\"}];", dur);
 	fflush(fscript);
 
+	if (rflg) {
+		audio_deinit();
+	}
+
 	done();
 }
 
 static void
-doshell(const char* command)
+doshell(const char *exec_cmd)
 {
 
 	(void) setsid();
@@ -271,10 +361,10 @@ doshell(const char* command)
 	edup2(slave, 2);
 	(void) close(slave);
 
-	if (!command) {
+	if (!exec_cmd) {
 		execl(shell, strrchr(shell, '/') + 1, "-i", NULL);
 	} else {
-		execl(shell, strrchr(shell, '/') + 1, "-c", command, NULL);
+		execl(shell, strrchr(shell, '/') + 1, "-c", exec_cmd, NULL);
 	}
 	perror(shell);
 	fail();
@@ -299,7 +389,7 @@ fixtty(void)
 int
 main(int argc, char **argv)
 {
-	char *command = NULL;
+	char *exec_cmd = NULL;
 	extern char *optarg;
 	extern int optind;
 	int ch;
@@ -310,7 +400,7 @@ main(int argc, char **argv)
 			aflg++;
 			break;
 		case 'e':
-			command = strdup(optarg);
+			exec_cmd = strdup(optarg);
 			break;
 		case 'r':
 			rflg = strdup(optarg);
@@ -344,18 +434,18 @@ main(int argc, char **argv)
 		audio_init(rflg, aflg);
 	}
 
+	if (pipe(controlfd) != 0) {
+		perror("pipe");
+		exit(EXIT_FAILURE);
+	}
+
 	(void) tcgetattr(0, &tt);
 	master = posix_openpt(O_RDWR | O_NOCTTY);
 	(void) ioctl(0, TIOCGWINSZ, (char *)&win);
 
 	fixtty();
 
-	(void) signal(SIGCHLD, finish);
-
-	if (pipe(controlfd) != 0) {
-		perror("pipe");
-		exit(EXIT_FAILURE);
-	}
+	signal(SIGCHLD, finish);
 
 	child = fork();
 	if (child < 0) {
@@ -374,15 +464,15 @@ main(int argc, char **argv)
 			/* Handle output to file in parent */
 			dooutput();
 		} else {
-			(void) close(controlfd[0]);
-			(void) close(controlfd[1]);
+			(void)close(controlfd[0]);
+			(void)close(controlfd[1]);
 
 			/* Run the shell in the child */
-			doshell(command);
+			doshell(exec_cmd);
 		}
 	}
 
-	/* Don't output in parent process */
+	(void)close(controlfd[0]);
 	(void)fclose(fscript);
 
 	audio_toggle();
