@@ -194,6 +194,12 @@ static struct command {
 } command;
 
 static void
+handle_command(void)
+{
+	return;
+}
+
+static void
 dooutput(void)
 {
 	static struct timeval prev, now;
