@@ -14,6 +14,7 @@
 #include <string.h>
 #include <stdlib.h>
 
+#include <poll.h>
 #include <signal.h>
 #include <termios.h>
 
@@ -31,6 +32,8 @@ static struct	termios tt;
 static struct	winsize win;
 static int	aflg;
 static char	*rflg;
+
+int controlfd[2];
 
 static FILE *
 efopen(const char *path, const char *mode)
@@ -134,8 +137,10 @@ static void
 dooutput(void)
 {
 	static struct timeval prev, now;
+	struct pollfd pollfds[2];
 	static double dur;
 	char obuf[BUFSIZ];
+	int paused = 0;
 	int first = 1;
 	int cc;
 
@@ -146,44 +151,96 @@ dooutput(void)
 	    win.ws_row, win.ws_col);
 	fputs("var _tre=[{", fscript);
 
+	pollfds[0].fd = master;
+	pollfds[0].events = (POLLIN | POLLERR | POLLHUP);
+
+	pollfds[1].fd = controlfd[0];
+	pollfds[1].events = (POLLIN | POLLERR | POLLHUP);
+
 	for (;;) {
-		cc = read(master, obuf, BUFSIZ);
-		if (cc <= 0) {
-			break;
+		int nready;
+
+		nready = poll(pollfds, 2, -1);
+		if (nready == -1) {
+			perror("poll");
+			exit(EXIT_FAILURE);
 		}
 
-		if (first) {
-			gettimeofday(&prev, NULL);
-			now = prev;
-			first = 0;
-		} else {
-			gettimeofday(&now, NULL);
-		}
+		for (int i = 0; i < nready; i++) {
+			if ((pollfds[i].revents & (POLLHUP | POLLERR))) {
+				goto end;
+			}
 
-		dur += time_delta(&prev, &now);
-		prev = now;
+			/* Control descriptor is highest priority */
+			if (pollfds[i].fd == controlfd[0]) {
+				unsigned char code;
 
-		do_write(STDOUT_FILENO, obuf, cc);
-
-		fprintf(fscript, "\"s\":%0.3f,\"e\":\"", dur);
-
-		for (int i = 0; i < cc; i++) {
-			switch (obuf[i]) {
-			case '"':
-			case '\\':
-				fputc('\\', fscript);
-			default:
-				if (!isprint(obuf[i])) {
-					fprintf(fscript, "\\x%02hhx", obuf[i]);
-				} else {
-					fputc(obuf[i], fscript);
+				cc = read(controlfd[0], &code, 1);
+				if (cc != 1) {
+					perror("read");
+					exit(EXIT_FAILURE);
 				}
-				break;
+
+				switch (code) {
+				case 0:
+					audio_toggle();
+					paused = !paused;
+
+					/* If we're unpausing, try not to add anything much */
+					if (!paused) {
+						gettimeofday(&now, NULL);
+						prev = now;
+					}
+
+					break;
+				default:
+					fprintf(stdout, "Invalid code: %02x\r\n", code);
+					exit(EXIT_FAILURE);
+				}
+			} else if (pollfds[i].fd == master) {
+				cc = read(master, obuf, BUFSIZ);
+				if (cc <= 0) {
+					break;
+				}
+
+				do_write(STDOUT_FILENO, obuf, cc);
+
+				if (!paused) {
+					if (first) {
+						gettimeofday(&prev, NULL);
+						now = prev;
+						first = 0;
+					} else {
+						gettimeofday(&now, NULL);
+					}
+
+					dur += time_delta(&prev, &now);
+					prev = now;
+
+					fprintf(fscript, "\"s\":%0.3f,\"e\":\"", dur);
+
+					for (int j = 0; j < cc; j++) {
+						switch (obuf[j]) {
+						case '"':
+						case '\\':
+							fputc('\\', fscript);
+						default:
+							if (!isprint(obuf[j])) {
+								fprintf(fscript, "\\x%02hhx", obuf[j]);
+							} else {
+								fputc(obuf[j], fscript);
+							}
+							break;
+						}
+					}
+
+					fputs("\"},{", fscript);
+				}
 			}
 		}
-		fputs("\"},{", fscript);
 	}
 
+end:
 	/* Empty last record */
 	fprintf(fscript, "\"s\":%0.3f,\"e\":\"\"}];", dur);
 	fflush(fscript);
@@ -262,7 +319,7 @@ main(int argc, char **argv)
 		case '?':
 		default:
 			fprintf(stderr, "usage: ttyrec [-e command] [-a] [-r audio.raw] [file]\n");
-			exit(1);
+			exit(EXIT_SUCCESS);
 		}
 	}
 
@@ -295,6 +352,11 @@ main(int argc, char **argv)
 
 	(void) signal(SIGCHLD, finish);
 
+	if (pipe(controlfd) != 0) {
+		perror("pipe");
+		exit(EXIT_FAILURE);
+	}
+
 	child = fork();
 	if (child < 0) {
 		perror("fork");
@@ -312,6 +374,9 @@ main(int argc, char **argv)
 			/* Handle output to file in parent */
 			dooutput();
 		} else {
+			(void) close(controlfd[0]);
+			(void) close(controlfd[1]);
+
 			/* Run the shell in the child */
 			doshell(command);
 		}
