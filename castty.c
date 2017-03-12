@@ -61,17 +61,17 @@ set_raw_input(void)
 int
 main(int argc, char **argv)
 {
-	char *exec_cmd, *audioout, *outfile;
+	char *exec_cmd, *audioout, *outfile, *devid;
 	int ch, masterfd, controlfd[2];
 	struct winsize owin, win;
 	extern char *optarg;
 	extern int optind;
 	long rows, cols;
 
-	exec_cmd = audioout = NULL;
+	exec_cmd = audioout = devid = NULL;
 	rows = cols = 0;
 
-	while ((ch = getopt(argc, argv, "?a:c:e:hr:")) != EOF) {
+	while ((ch = getopt(argc, argv, "?a:c:d:e:hlr:")) != EOF) {
 		char *e;
 
 		switch (ch) {
@@ -87,8 +87,15 @@ main(int argc, char **argv)
 				exit(EXIT_FAILURE);
 			}
 			break;
+		case 'd':
+			devid = strdup(optarg);
+			break;
 		case 'e':
 			exec_cmd = strdup(optarg);
+			break;
+		case 'l':
+			audio_list();
+			exit(EXIT_SUCCESS);
 			break;
 		case 'r':
 			errno = 0;
@@ -103,9 +110,24 @@ main(int argc, char **argv)
 		case 'h':
 		case '?':
 		default:
-			fprintf(stderr, "usage: castty [-a out.le16pcm] [-c cols] [-r rows] [-e command] [out.js]\n");
+			fprintf(stderr, "usage: castty [-adlcre] [out.js]\n"
+			    " -a <outfile>   Output audio to <outfile>. Must be specified with -d.\n"
+			    " -c <cols>      Use <cols> columns in the recorded shell session.\n"
+			    " -d <device>    Use audio device <device> for input.\n"
+			    " -e <cmd>       Execute <cmd> from the recorded shell session.\n"
+			    " -l             List available audio input devices and exit.\n"
+			    " -r <rows>      Use <rows> rows in the recorded shell session.\n"
+			    "\n"
+			    " [out.js]       Optional output filename of recorded events. If not specified,\n"
+			    "                a file \"events.js\" will be created.\n");
 			exit(EXIT_SUCCESS);
 		}
+	}
+
+	if ((audioout == NULL && devid != NULL) ||
+	    (devid == NULL && audioout != NULL)) {
+		fprintf(stderr, "If -d or -a are specified, both must appear.\n");
+		exit(EXIT_FAILURE);
 	}
 
 	argc -= optind;
@@ -140,8 +162,16 @@ main(int argc, char **argv)
 
 	owin = win;
 
-	win.ws_row = rows ? rows : win.ws_row;
-	win.ws_col = cols ? cols : win.ws_col;
+	if (!rows || rows > win.ws_row) {
+		rows = win.ws_row;
+	}
+
+	if (!cols || cols > win.ws_col) {
+		cols = win.ws_col;
+	}
+
+	win.ws_row = rows;
+	win.ws_col = cols;
 
 	set_raw_input();
 
@@ -168,7 +198,7 @@ main(int argc, char **argv)
 			/* Handle output to file in parent */
 			xclose(controlfd[1]);
 			outputproc(masterfd, controlfd[0], outfile, audioout,
-			    0, win.ws_row, win.ws_col);
+			    devid, 0, win.ws_row, win.ws_col);
 		} else {
 			char *shell = getenv("SHELL");
 			if (shell == NULL) {

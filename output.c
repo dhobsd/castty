@@ -57,7 +57,7 @@ time_delta(struct timeval *prev, struct timeval *now)
 
 void
 outputproc(int masterfd, int controlfd, const char *outfn, const char *audioout,
-    int append, int rows, int cols)
+    const char *devid, int append, int rows, int cols)
 {
 	static struct timeval prev, now;
 	struct pollfd pollfds[2];
@@ -69,8 +69,8 @@ outputproc(int masterfd, int controlfd, const char *outfn, const char *audioout,
 	FILE *evout;
 	int cc;
 
-	if (audioout) {
-		audio_start(audioout, append);
+	if (audioout && devid) {
+		audio_start(devid, audioout, append);
 	}
 
 	evout = fopen(outfn, append ? "ab" : "wb");
@@ -234,7 +234,7 @@ outputproc(int masterfd, int controlfd, const char *outfn, const char *audioout,
 	}
 
 end:
-	if (audioout) {
+	if (audioout && devid) {
 		audio_stop();
 	}
 

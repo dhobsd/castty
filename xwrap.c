@@ -40,6 +40,20 @@ xfclose(FILE *f)
 	}
 }
 
+FILE *
+xfopen(const char *f, const char *m)
+{
+	FILE *r;
+
+	r = fopen(f, m);
+	if (r == NULL) {
+		perror("fopen");
+		exit(EXIT_FAILURE);
+	}
+
+	return r;
+}
+
 void
 xtcsetattr(int fd, int opt, const struct termios *tio)
 {

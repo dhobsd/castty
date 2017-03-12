@@ -20,8 +20,10 @@ don't have a microphone, unless you have some weird audio mixing setup.
 
 ### Dependencies 
 
-It depends on [PortAudio](http://portaudio.com/) (for recording audio) and
-[Concurrency Kit](http://concurrencykit.org/).
+It depends on [libsoundio](http://libsound.io/). Ubuntu 16.04 seems to ship a
+broken version of `libsoundio` that depends on a version of JACK that doesn't
+work. This is fixed in the [libsoundio repo](https://github.com/andrewrk/libsoundio),
+but you will have to build it yourself.
 
 There are no UI build dependencies because I find that idea a little silly.
 
@@ -33,27 +35,28 @@ installed to a location other than `/usr/local/`, you will have to edit the
 
 ## Usage
 
-To use:
+    usage: castty [-adlcre] [out.js]
+     -a <outfile>   Output audio to <outfile>. Must be specified with -d.
+     -c <cols>      Use <cols> columns in the recorded shell session.
+     -d <device>    Use audio device <device> for input.
+     -e <cmd>       Execute <cmd> from the recorded shell session.
+     -l             List available audio input devices and exit.
+     -r <rows>      Use <rows> rows in the recorded shell session.
+    
+     [out.js]       Optional output filename of recorded events. If not specified,
+                    a file "events.js" will be created.
 
-    % castty
+To list usable input devices for recording, just run `castty -l`. Output will
+look something like this:
 
-or
+    Available input devices:
+       0: Built-in Microphone 44100Hz
+          castty -d 'AppleHDAEngineInput:1B,0,1,0:1' -a audio.f32le
 
-    % castty -a audio.raw
+The `-d 'AppleHDAEngineInput:1B,0,1,0:1'` argument can be pasted directly to
+castty to choose that device for recording. The audio format and sample rate
+castty will use is also provided.
 
-or
-
-    % castty -a audio.raw termevents.js
-
-You may set the rows and columns to capture with the `-r` and `-c` options. If
-either or both are unset, the value will be the current number in the active
-terminal. Resizing isn't currently supported. This is particularly useful if
-you like to have a large terminal window, but would like to record for a
-smaller screen size (like mobile devices). Do note that larger numbers of rows
-and columns can present accessibility challenges for smaller screens.
-
-CasTTY chooses the system's default audio input device. If you wish to use a
-different device, set it to the default. outputs 16-bit LPCM audio at 44.1kHz.
 Utilities like [sox](http://sox.sourceforge.net/) may be used to convert the
 audio into more useful formats for web publication.
 
