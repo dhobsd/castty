@@ -1,3 +1,4 @@
+#define _XOPEN_SOURCE
 #include <sys/ioctl.h>
 
 #include <stdio.h>
