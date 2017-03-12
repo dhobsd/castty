@@ -103,7 +103,7 @@ main(int argc, char **argv)
 		case 'h':
 		case '?':
 		default:
-			fprintf(stderr, "usage: ttyrec [-e command] [-a] [-r audio.raw] [file]\n");
+			fprintf(stderr, "usage: castty [-a out.le16pcm] [-c cols] [-r rows] [-e command] [out.js]\n");
 			exit(EXIT_SUCCESS);
 		}
 	}
