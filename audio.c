@@ -76,6 +76,13 @@ audio_record(const void *ibuf, void *obuf, unsigned long frames,
 	for (unsigned long i = 0; i < frames * inParams.channelCount; i++) {
 		intptr_t v = buf[i];
 		ck_ring_enqueue_spsc(&buffer.ring, buffer.b, (void *)v);
+
+		/* Upgrade to stereo, nothing worse than single-channel output
+		 * in one ear with headphones.
+		 */
+		if (inParams.channelCount == 1) {
+			ck_ring_enqueue_spsc(&buffer.ring, buffer.b, (void *)v);
+		}
 	}
 
 	return paContinue;
