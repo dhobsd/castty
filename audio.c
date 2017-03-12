@@ -101,7 +101,7 @@ reader(void *v)
 	(void) v;
 
 	/* 44100Hz * 16 bit samples * 2 channels */
-	buffer.b = calloc(np2(44100 * 4), sizeof (int64_t));
+	buffer.b = calloc(np2(44100 * 4), sizeof (intptr_t));
 	if (buffer.b == NULL) {
 		fprintf(stderr, "Couldn't allocate ring buffer\n");
 		exit(EXIT_FAILURE);

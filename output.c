@@ -81,8 +81,8 @@ outputproc(int masterfd, int controlfd, const char *outfn, const char *audioout,
 	}
 
 	setbuf(evout, NULL);
-
 	setbuf(stdout, NULL);
+
 	xclose(STDIN_FILENO);
 
 	/* Clear screen */
@@ -241,7 +241,6 @@ end:
 
 	/* Empty last record */
 	fprintf(evout, "\"s\":%0.3f,\"e\":\"\"}];", dur);
-	fflush(evout);
 
 	xfclose(evout);
 	xclose(masterfd);

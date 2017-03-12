@@ -56,7 +56,7 @@ set_raw_input(void)
 	rtt.c_cc[VMIN] = 1;
 	rtt.c_cc[VTIME] = 0;
 
-	xtcsetattr(0, TCSAFLUSH, &rtt);
+	xtcsetattr(STDIN_FILENO, TCSAFLUSH, &rtt);
 }
 
 int
@@ -74,7 +74,7 @@ main(int argc, char **argv)
 	while ((ch = getopt(argc, argv, "?a:c:e:hr:")) != EOF) {
 		char *e;
 
-		switch ((char)ch) {
+		switch (ch) {
 		case 'a':
 			audioout = strdup(optarg);
 			break;
@@ -122,7 +122,7 @@ main(int argc, char **argv)
 		exit(EXIT_FAILURE);
 	}
 
-	if (tcgetattr(0, &tt) == -1) {
+	if (tcgetattr(STDIN_FILENO, &tt) == -1) {
 		perror("tcgetattr");
 		exit(EXIT_FAILURE);
 	}
@@ -167,8 +167,8 @@ main(int argc, char **argv)
 		if (subchild) {
 			/* Handle output to file in parent */
 			xclose(controlfd[1]);
-			outputproc(masterfd, controlfd[0], outfile, audioout, 0,
-			    win.ws_row, win.ws_col);
+			outputproc(masterfd, controlfd[0], outfile, audioout,
+			    0, win.ws_row, win.ws_col);
 		} else {
 			char *shell = getenv("SHELL");
 			if (shell == NULL) {
