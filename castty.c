@@ -1,4 +1,3 @@
-/* See LICENSE for redistribution information */
 #define _XOPEN_SOURCE 600
 
 #include <sys/types.h>
@@ -70,6 +69,7 @@ main(int argc, char **argv)
 	long rows, cols;
 
 	exec_cmd = audioout = NULL;
+	rows = cols = 0;
 
 	while ((ch = getopt(argc, argv, "?a:c:e:hr:")) != EOF) {
 		char *e;

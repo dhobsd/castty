@@ -1,4 +1,4 @@
-/* See LICENSE for redistribution information */
+#define _BSD_SOURCE
 #include <stdlib.h>
 #include <stdio.h>
 #include <stdint.h>
