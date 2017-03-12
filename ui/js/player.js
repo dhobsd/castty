@@ -40,11 +40,14 @@ var player = function(audioFile, containerElem, termEvents, termInfo) {
 		Player.playTime = 0;
 
 		Player.seekTo = function(t) {
-			if (Player.eventOff && t < Player.termEvents[Player.eventOff - 1].e) {
+			var back = Player.eventOff && t < Player.termEvents[Player.eventOff - 1].s;
+
+			if (back) {
 				Player.term.clear();
+				Player.term.reset();
 			}
 
-			var i = 0;
+			var i = back ? 0 : Player.eventOff;
 			var str = "";
 			while (Player.termEvents[i].s <= t) {
 				str += Player.termEvents[i++].e;
