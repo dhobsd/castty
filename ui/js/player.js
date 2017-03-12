@@ -40,13 +40,17 @@ var player = function(audioFile, containerElem, termEvents, termInfo) {
 		Player.playTime = 0;
 
 		Player.seekTo = function(t) {
-			Player.term.clear();
-
-			var i = 0;
-			while (Player.termEvents[i].s <= t) {
-				Player.term.write(Player.termEvents[i++].e);
+			if (Player.eventOff && t < Player.termEvents[Player.eventOff - 1].e) {
+				Player.term.clear();
 			}
 
+			var i = 0;
+			var str = "";
+			while (Player.termEvents[i].s <= t) {
+				str += Player.termEvents[i++].e;
+			}
+
+			Player.term.write(str);
 			Player.eventOff = i;
 
 			return Player.termEvents[i].s - t;
@@ -175,7 +179,7 @@ var player = function(audioFile, containerElem, termEvents, termInfo) {
 		});
 
 		$(Player.audio).on('durationchange', function() {
-			Player.maxSeek = Player.audio.duration;
+			Player.maxSeek = Player.audio.duration * 1000;
 		});
 
 		$(Player.audio).on('canplaythrough', function() {
