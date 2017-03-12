@@ -10,6 +10,7 @@
 #include <string.h>
 #include <stdlib.h>
 
+#include <errno.h>
 #include <fcntl.h>
 #include <signal.h>
 #include <termios.h>
@@ -42,7 +43,7 @@ handle_sigchld(int sig)
 }
 
 static void
-fixtty(void)
+set_raw_input(void)
 {
 	struct termios rtt;
 
@@ -52,7 +53,7 @@ fixtty(void)
 	rtt.c_lflag &= ~(ECHO|ECHONL|ICANON|ISIG|IEXTEN);
 	rtt.c_cflag &= ~(CSIZE|PARENB);
 	rtt.c_cflag |= CS8;
-	rtt.c_cc[VMIN] = 1;        /* read returns when one char is available.  */
+	rtt.c_cc[VMIN] = 1;
 	rtt.c_cc[VTIME] = 0;
 
 	xtcsetattr(0, TCSAFLUSH, &rtt);
@@ -61,22 +62,44 @@ fixtty(void)
 int
 main(int argc, char **argv)
 {
-	char *exec_cmd, *rflg, *outfile;
+	char *exec_cmd, *audioout, *outfile;
 	int ch, masterfd, controlfd[2];
+	struct winsize owin, win;
 	extern char *optarg;
-	struct winsize win;
 	extern int optind;
+	long rows, cols;
 
-	exec_cmd = rflg = NULL;
+	exec_cmd = audioout = NULL;
 
-	while ((ch = getopt(argc, argv, "ue:h?r:")) != EOF) {
+	while ((ch = getopt(argc, argv, "?a:c:e:hr:")) != EOF) {
+		char *e;
+
 		switch ((char)ch) {
+		case 'a':
+			audioout = strdup(optarg);
+			break;
+		case 'c':
+			errno = 0;
+			cols = strtol(optarg, &e, 10);
+			if (e == optarg || errno != 0 || cols > 1000) {
+				fprintf(stderr, "castty: Invalid column count: %ld\n",
+				    cols);
+				exit(EXIT_FAILURE);
+			}
+			break;
 		case 'e':
 			exec_cmd = strdup(optarg);
 			break;
 		case 'r':
-			rflg = strdup(optarg);
+			errno = 0;
+			rows = strtol(optarg, &e, 10);
+			if (e == optarg || errno != 0 || rows > 1000) {
+				fprintf(stderr, "castty: Invalid row count: %ld\n",
+				    rows);
+				exit(EXIT_FAILURE);
+			}
 			break;
+
 		case 'h':
 		case '?':
 		default:
@@ -110,12 +133,17 @@ main(int argc, char **argv)
 		exit(EXIT_FAILURE);
 	}
 
-	if (ioctl(0, TIOCGWINSZ, &win) == -1) {
+	if (ioctl(STDIN_FILENO, TIOCGWINSZ, &win) == -1) {
 		perror("ioctl(TIOCGWINSZ)");
 		exit(EXIT_FAILURE);
 	}
 
-	fixtty();
+	owin = win;
+
+	win.ws_row = rows ? rows : win.ws_row;
+	win.ws_col = cols ? cols : win.ws_col;
+
+	set_raw_input();
 
 	signal(SIGCHLD, handle_sigchld);
 
@@ -139,7 +167,7 @@ main(int argc, char **argv)
 		if (subchild) {
 			/* Handle output to file in parent */
 			xclose(controlfd[1]);
-			outputproc(masterfd, controlfd[0], outfile, rflg, 0,
+			outputproc(masterfd, controlfd[0], outfile, audioout, 0,
 			    win.ws_row, win.ws_col);
 		} else {
 			char *shell = getenv("SHELL");
@@ -152,13 +180,21 @@ main(int argc, char **argv)
 			xclose(controlfd[1]);
 
 			/* Run the shell in the child */
-			shellproc(shell, exec_cmd, &win, &tt, masterfd);
+			shellproc(shell, exec_cmd, &win, masterfd);
 		}
 	}
 
 	xclose(controlfd[0]);
 
 	inputproc(masterfd, controlfd[1]);
+
+	if (ioctl(STDOUT_FILENO, TIOCSWINSZ, &owin) == -1) {
+		perror("ioctl(TIOCSWINSZ)");
+	}
+
+	if (tcsetattr(STDOUT_FILENO, TCSAFLUSH, &tt) == -1) {
+		perror("tcsetattr");
+	}
 
 	return 0;
 }

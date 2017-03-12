@@ -39,11 +39,18 @@ To use:
 
 or
 
-    % castty -r audio.raw
+    % castty -a audio.raw
 
 or
 
-    % castty -r audio.raw termevents.js
+    % castty -a audio.raw termevents.js
+
+You may set the rows and columns to capture with the `-r` and `-c` options. If
+either or both are unset, the value will be the current number in the active
+terminal. Resizing isn't currently supported. This is particularly useful if
+you like to have a large terminal window, but would like to record for a
+smaller screen size (like mobile devices). Do note that larger numbers of rows
+and columns can present accessibility challenges for smaller screens.
 
 CasTTY chooses the system's default audio input device. If you wish to use a
 different device, set it to the default. outputs 16-bit LPCM audio at 44.1kHz.

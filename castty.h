@@ -16,7 +16,7 @@ void audio_stop(void);
 
 void inputproc(int, int);
 void outputproc(int, int, const char *, const char *, int, int, int);
-void shellproc(const char *, const char *, struct winsize *, struct termios *, int);
+void shellproc(const char *, const char *, struct winsize *, int);
 
 void xclose(int);
 int xdup2(int, int);

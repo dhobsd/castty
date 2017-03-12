@@ -12,11 +12,12 @@
 #include "castty.h"
 
 void
-shellproc(const char *shell, const char *exec_cmd, struct winsize *win,
-    struct termios *tt, int masterfd)
+shellproc(const char *shell, const char *exec_cmd, struct winsize *win, int masterfd)
 {
 	char *pt_name;
 	int slavefd;
+
+	slavefd = -1;
 
 	if (setsid() == -1) {
 		perror("setsid");
@@ -74,10 +75,4 @@ end:
 	if (kill(0, SIGTERM) == -1) {
 		perror("kill");
 	}
-
-	if (tcsetattr(0, TCSAFLUSH, tt) == -1) {
-		perror("tcsetattr");
-	}
-
-	exit(EXIT_FAILURE);
 }
