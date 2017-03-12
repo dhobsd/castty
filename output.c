@@ -44,7 +44,6 @@ get_command(struct cmdinput *cmd)
 	return CMD_NONE;
 }
 
-
 static double
 time_delta(struct timeval *prev, struct timeval *now)
 {
