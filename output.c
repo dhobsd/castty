@@ -111,10 +111,6 @@ outputproc(int masterfd, int controlfd, const char *outfn, const char *audioout,
 
 	cmd.off = 0;
 
-	if (audioout) {
-		audio_toggle_pause();
-	}
-
 	for (;;) {
 		int nready;
 
@@ -192,6 +188,10 @@ outputproc(int masterfd, int controlfd, const char *outfn, const char *audioout,
 					printf("\x1b" "8\x1b" "0\x1b[K");
 				}
 			} else if (pollfds[i].fd == masterfd) {
+				if (audioout && first) {
+					audio_toggle_pause();
+				}
+
 				cc = read(masterfd, obuf, BUFSIZ);
 				if (cc <= 0) {
 					goto end;
