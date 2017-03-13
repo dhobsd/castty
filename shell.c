@@ -1,4 +1,3 @@
-#define _XOPEN_SOURCE 500
 #include <sys/ioctl.h>
 
 #include <stdio.h>

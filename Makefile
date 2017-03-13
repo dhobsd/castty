@@ -2,7 +2,7 @@ CC = gcc
 
 WARNINGS := -Wall -Wextra -Wshadow
 
-CPPFLAGS = -I/usr/local/include
+CPPFLAGS = -I/usr/local/include -D_XOPEN_SOURCE=600
 CFLAGS = -O2 -std=c11 -MMD -MP $(WARNINGS)
 LDFLAGS = -L/usr/local/lib
 LDLIBS = -lsoundio -lpthread -lmp3lame
