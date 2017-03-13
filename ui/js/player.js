@@ -1,3 +1,11 @@
+/* https://stackoverflow.com/questions/1582534/calculating-text-width/15302051#15302051 */
+$.fn.textWidth = function(text, font) {
+	if (!$.fn.textWidth.fakeEl) $.fn.textWidth.fakeEl = $('<span>').hide().appendTo(document.body);
+	$.fn.textWidth.fakeEl.text(text || this.val() || this.text()).css('font-family', font || this.css('font-family'));
+	return $.fn.textWidth.fakeEl.width();
+};
+
+/* https://stackoverflow.com/questions/3144711/find-the-time-left-in-a-settimeout/36389263#36389263 */
 var getTimeout = (function() {
 	var _setTimeout = setTimeout,
 	map = {};
@@ -31,6 +39,20 @@ var player = function(audioFile, containerElem, termEvents, termInfo) {
 			cols: termInfo.cols
 		});
 		Player.term.open(Player.termContainer[0]);
+		Player.termWidth = $(Player.termContainer).textWidth('m'.repeat(termInfo.cols),
+		    'courier-new,courier,monospace') + 'px';
+
+		Player.termContainer.css({
+		    margin: '0 auto',
+		    padding: '2px',
+		    width: Player.termWidth
+		});
+
+		Player.controls.css({
+		    margin: '0 auto',
+		    padding: '2px',
+		    width: Player.termWidth
+		});
 
 		Player.termEvents = termEvents;
 		Player.eventOff = 0;
@@ -49,9 +71,12 @@ var player = function(audioFile, containerElem, termEvents, termInfo) {
 
 			var i = back ? 0 : Player.eventOff;
 			var str = "";
-			while (Player.termEvents[i].s <= t) {
+			while (i < Player.termEvents.length &&
+			    Player.termEvents[i].s <= t) {
 				str += Player.termEvents[i++].e;
 			}
+
+			i = i == Player.termEvents.length ? i - 1 : i;
 
 			Player.term.write(str);
 			Player.eventOff = i;
@@ -93,6 +118,8 @@ var player = function(audioFile, containerElem, termEvents, termInfo) {
 					Player.seeker.val(0).change();
 					Player.seekUpdate = 0;
 					Player.ended = 0;
+					Player.paused = 1;
+					Player.restarted = 1;
 				}
 
 				if (Player.paused) {
@@ -123,7 +150,8 @@ var player = function(audioFile, containerElem, termEvents, termInfo) {
 
 		Player.duration = Player.termEvents[Player.termEvents.length - 1].s;
 		Player.seeker = $('<input type="range" min="0" max="' +
-		    Player.duration + '" step="100" value="0">').appendTo(Player.controls);
+		    Player.duration + '" step="' + Player.duration / 1000 +
+		    '" value="0">').appendTo(Player.controls);
 
 		Player.maxSeek = 0;
 		Player.seeking = 0;
@@ -187,7 +215,11 @@ var player = function(audioFile, containerElem, termEvents, termInfo) {
 
 		$(Player.audio).on('canplaythrough', function() {
 			Player.startable = 1;
-			Player.toggle.text('\u25b6');
+			if (!Player.restarted) {
+				Player.toggle.text('\u25b6');
+			} else {
+				Player.restarted = 0;
+			}
 			Player.toggle.prop('disabled', false);
 		});
 
