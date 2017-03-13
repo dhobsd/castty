@@ -33,6 +33,10 @@ static enum SoundIoFormat formats[] = {
 	SoundIoFormatInvalid,
 };
 
+enum {
+	BUF_TIME_S = 10,
+};
+
 static int rates[] = {
 	44100,
 	24000,
@@ -60,11 +64,6 @@ static int mp3;
 
 pthread_t wthread, rthread;
 
-enum {
-	/* 4MB should be good enough for anybody ;P */
-	MP3_BUF_SIZE = 1<<22,
-};
-
 static void *
 writer(void *priv)
 {
@@ -85,7 +84,7 @@ writer(void *priv)
 			exit(EXIT_FAILURE);
 		}
 
-		mp3buf = malloc(MP3_BUF_SIZE);
+		mp3buf = malloc((1.25 * BUF_TIME_S * ctx.stream->sample_rate) + 7200);
 		if (mp3buf == NULL) {
 			fprintf(stderr, "No memory for mp3 encoding buffer\n");
 			exit(EXIT_FAILURE);
@@ -482,7 +481,7 @@ audio_start(const char *devid, const char *outfile, int append)
 	ctx.io = soundio;
 	ctx.dev = dev;
 	ctx.rb = soundio_ring_buffer_create(soundio,
-	    60 * ctx.stream->sample_rate * ctx.stream->bytes_per_frame);
+	    BUF_TIME_S * ctx.stream->sample_rate * ctx.stream->bytes_per_frame);
 	
 	if (ctx.rb == NULL) {
 		fprintf(stderr, "Couldn't allocate ring buffer for audio\n");
