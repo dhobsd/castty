@@ -57,8 +57,8 @@ static struct audio_ctx {
 	struct SoundIo *io;
 } ctx;
 
+static volatile int recording;
 static int post = 2;
-static int recording;
 static int muted;
 static int mp3;
 
@@ -198,100 +198,77 @@ audio_clock_ms(void)
 }
 
 static void
-audio_record(struct SoundIoInStream *instream, int frame_count_min, int frame_count_max)
+audio_record(struct SoundIoInStream *stream, int min_frames, int max_frames)
 {
 	struct SoundIoChannelArea *areas;
-	int err;
+	int err, nfree;
+	char *buf;
 
-	char *write_ptr = soundio_ring_buffer_write_ptr(ctx.rb);
-	int free_bytes = soundio_ring_buffer_free_count(ctx.rb);
-	int free_count = free_bytes / instream->bytes_per_frame;
+	buf = soundio_ring_buffer_write_ptr(ctx.rb);
+	nfree = soundio_ring_buffer_free_count(ctx.rb) / stream->bytes_per_frame;
 
-	if (free_count < frame_count_min) {
+	if (nfree < min_frames) {
 		fprintf(stderr, "ring buffer overflow\n");
 		exit(EXIT_FAILURE);
 	}
 
-	int write_frames = MIN(free_count, frame_count_max);
-	int frames_left = write_frames;
+	int to_write = MIN(nfree, max_frames);
+	int remaining = to_write;
 
 	if (!recording) {
-		int advance_bytes = write_frames * instream->bytes_per_frame;
-		soundio_ring_buffer_advance_write_ptr(ctx.rb, advance_bytes);
+		soundio_ring_buffer_advance_write_ptr(ctx.rb, to_write * stream->bytes_per_frame);
 		return;
 	}
 
-	while (1) {
-		int frame_count = frames_left;
+	while (remaining > 0) {
+		int nframe = remaining;
 
-		if ((err = soundio_instream_begin_read(instream, &areas, &frame_count))) {
+		if ((err = soundio_instream_begin_read(stream, &areas, &nframe))) {
 			fprintf(stderr, "begin read error: %s", soundio_strerror(err));
 			exit(EXIT_FAILURE);
 		}
 
-		if (!frame_count)
+		if (!nframe)
 			break;
 
-		if (!areas) {
-			// Due to an overflow there is a hole. Fill the ring buffer with
-			// silence for the size of the hole.
-			memset(write_ptr, 0, frame_count * instream->bytes_per_frame);
+		if (!areas || muted) {
+			memset(buf, 0, nframe * stream->bytes_per_frame);
+			ctx.clock += nframe;
 		} else {
-			if (muted) {
-				memset(write_ptr, 0, instream->bytes_per_sample *
-				    instream->layout.channel_count * frame_count);
-				ctx.clock += frame_count;
-			} else {
+			int off = nframe * stream->bytes_per_sample;
+			for (int frame = 0; frame < nframe; frame++) {
+				int ch = 0;
+				memcpy(buf, areas[ch].ptr, stream->bytes_per_sample);
+
+				if (!ctx.mono) {
+					areas[ch].ptr += areas[ch].step;
+					ch++;
+				}
+
 				/* Don't interleave when outputting MP3 */
 				if (!mp3) {
-					for (int frame = 0; frame < frame_count; frame++) {
-						int ch = 0;
-						memcpy(write_ptr, areas[ch].ptr, instream->bytes_per_sample);
-
-						if (!ctx.mono) {
-							areas[ch].ptr += areas[ch].step;
-							ch++;
-						}
-						write_ptr += instream->bytes_per_sample;
-
-						memcpy(write_ptr, areas[ch].ptr, instream->bytes_per_sample);
-						write_ptr += instream->bytes_per_sample;
-						areas[ch].ptr += areas[ch].step;
-						ctx.clock++;
-					}
+					buf += stream->bytes_per_sample;
+					memcpy(buf, areas[ch].ptr, stream->bytes_per_sample);
+					buf += stream->bytes_per_sample;
 				} else {
-					int off = frame_count * instream->bytes_per_sample;
-					for (int frame = 0; frame < frame_count; frame++) {
-						int ch = 0;
-						memcpy(write_ptr, areas[ch].ptr, instream->bytes_per_sample);
-
-						if (!ctx.mono) {
-							areas[ch].ptr += areas[ch].step;
-							ch++;
-						}
-
-						memcpy(write_ptr + off, areas[ch].ptr, instream->bytes_per_sample);
-
-						write_ptr += instream->bytes_per_sample;
-						areas[ch].ptr += areas[ch].step;
-						ctx.clock++;
-					}
+					memcpy(buf + off, areas[ch].ptr, stream->bytes_per_sample);
+					buf += stream->bytes_per_sample;
 				}
+
+				areas[ch].ptr += areas[ch].step;
+				ctx.clock++;
 			}
 		}
 
-		if ((err = soundio_instream_end_read(instream))) {
+		if ((err = soundio_instream_end_read(stream))) {
 			fprintf(stderr, "end read error: %s", soundio_strerror(err));
 			exit(EXIT_FAILURE);
 		}
 
-		frames_left -= frame_count;
-		if (frames_left <= 0)
-			break;
+		remaining -= nframe;
 	}
 
-	int advance_bytes = write_frames * instream->bytes_per_frame;
-	soundio_ring_buffer_advance_write_ptr(ctx.rb, advance_bytes);
+	soundio_ring_buffer_advance_write_ptr(ctx.rb, to_write * stream->bytes_per_frame);
 }
 
 static void *
