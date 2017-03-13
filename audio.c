@@ -184,6 +184,7 @@ writer(void *priv)
 		fwrite(mp3buf, 1, blen, ctx.fout);
 
 		lame_close(lame);
+		free(mp3buf);
 	}
 
 	return NULL;
