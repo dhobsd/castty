@@ -71,7 +71,7 @@ main(int argc, char **argv)
 	exec_cmd = audioout = devid = NULL;
 	rows = cols = 0;
 
-	while ((ch = getopt(argc, argv, "?a:c:d:e:hlr:")) != EOF) {
+	while ((ch = getopt(argc, argv, "?a:c:d:e:hlmr:")) != EOF) {
 		char *e;
 
 		switch (ch) {
@@ -97,6 +97,9 @@ main(int argc, char **argv)
 			audio_list();
 			exit(EXIT_SUCCESS);
 			break;
+		case 'm':
+			audio_toggle_mp3();
+			break;
 		case 'r':
 			errno = 0;
 			rows = strtol(optarg, &e, 10);
@@ -116,6 +119,7 @@ main(int argc, char **argv)
 			    " -d <device>    Use audio device <device> for input.\n"
 			    " -e <cmd>       Execute <cmd> from the recorded shell session.\n"
 			    " -l             List available audio input devices and exit.\n"
+			    " -m             Encode audio to mp3 before writing.\n"
 			    " -r <rows>      Use <rows> rows in the recorded shell session.\n"
 			    "\n"
 			    " [out.js]       Optional output filename of recorded events. If not specified,\n"

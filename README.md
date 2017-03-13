@@ -41,6 +41,7 @@ installed to a location other than `/usr/local/`, you will have to edit the
      -d <device>    Use audio device <device> for input.
      -e <cmd>       Execute <cmd> from the recorded shell session.
      -l             List available audio input devices and exit.
+     -m             Encode audio to mp3 before writing.
      -r <rows>      Use <rows> rows in the recorded shell session.
     
      [out.js]       Optional output filename of recorded events. If not specified,

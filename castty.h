@@ -17,6 +17,7 @@ void audio_list(void);
 void audio_mute(void);
 void audio_start(const char *devid, const char *outfile, int append);
 void audio_stop(void);
+void audio_toggle_mp3(void);
 void audio_toggle_mute(void);
 void audio_toggle_pause(void);
 

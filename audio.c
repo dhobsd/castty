@@ -7,6 +7,7 @@
 #include <pthread.h>
 #include <unistd.h>
 
+#include <lame/lame.h>
 #include <soundio/soundio.h>
 
 #include "castty.h"
@@ -30,52 +31,8 @@ static enum SoundIoFormat formats[] = {
 	SoundIoFormatS16LE,
 	SoundIoFormatU16BE,
 	SoundIoFormatU16LE,
-	SoundIoFormatS8,
-	SoundIoFormatU8,
 	SoundIoFormatInvalid,
 };
-
-static const char *
-stringify_format(enum SoundIoFormat fmt)
-{
-
-	switch (fmt) {
-        case SoundIoFormatFloat32LE:
-		return "f32le";
-        case SoundIoFormatFloat32BE:
-		return "f32be";
-        case SoundIoFormatU32BE:
-		return "u32be";
-        case SoundIoFormatU32LE:
-		return "u32le";
-        case SoundIoFormatS32BE:
-		return "s32be";
-        case SoundIoFormatS32LE:
-		return "s32le";
-        case SoundIoFormatS24BE:
-		return "s24be";
-        case SoundIoFormatS24LE:
-		return "s24le";
-        case SoundIoFormatU24BE:
-		return "u24be";
-        case SoundIoFormatU24LE:
-		return "u24le";
-        case SoundIoFormatS16BE:
-		return "s16be";
-        case SoundIoFormatS16LE:
-		return "s16le";
-        case SoundIoFormatU16BE:
-		return "u16be";
-        case SoundIoFormatU16LE:
-		return "u16le";
-        case SoundIoFormatS8:
-		return "s8";
-        case SoundIoFormatU8:
-		return "u8";
-	default:
-		return "invalid";
-	}
-}
 
 static int rates[] = {
 	44100,
@@ -89,6 +46,7 @@ static int rates[] = {
 static struct audio_ctx {
 	FILE *fout;
 	double clock;
+	int mono;
 
 	struct SoundIoInStream *stream;
 	struct SoundIoRingBuffer *rb;
@@ -99,12 +57,21 @@ static struct audio_ctx {
 static int post = 2;
 static int recording;
 static int muted;
+static int mp3;
 
 pthread_t wthread, rthread;
+
+enum {
+	/* 4MB should be good enough for anybody ;P */
+	MP3_BUF_SIZE = 1<<22,
+};
 
 static void *
 writer(void *priv)
 {
+	unsigned char *mp3buf = NULL;
+	lame_t lame;
+
 	(void)priv;
 
 	__sync_fetch_and_sub(&post, 1);
@@ -112,15 +79,97 @@ writer(void *priv)
 		usleep(10);
 	}
 
+	if (mp3) {
+		lame = lame_init();
+		if (lame == NULL) {
+			fprintf(stderr, "Couldn't initialize lame encoder\n");
+			exit(EXIT_FAILURE);
+		}
+
+		mp3buf = malloc(MP3_BUF_SIZE);
+		if (mp3buf == NULL) {
+			fprintf(stderr, "No memory for mp3 encoding buffer\n");
+			exit(EXIT_FAILURE);
+		}
+
+		lame_set_num_channels(lame, ctx.stream->layout.channel_count);
+		lame_set_mode(lame, ctx.mono ? MONO : STEREO);
+		lame_set_error_protection(lame, 1);
+		lame_set_in_samplerate(lame, ctx.stream->sample_rate);
+		lame_set_findReplayGain(lame, 1);
+		lame_set_asm_optimizations(lame, MMX, 1);
+		lame_set_asm_optimizations(lame, SSE, 1);
+		lame_set_quality(lame, 3);
+		lame_set_bWriteVbrTag(lame, 1);
+		lame_set_VBR(lame, vbr_mtrh);
+		lame_set_VBR_q(lame, 3);
+		lame_set_VBR_min_bitrate_kbps(lame, 96);
+		lame_set_VBR_max_bitrate_kbps(lame, 320);
+
+		lame_init_params(lame);
+	}
+
 	while (1) {
 		int fill_bytes = soundio_ring_buffer_fill_count(ctx.rb);
 		char *read_buf = soundio_ring_buffer_read_ptr(ctx.rb);
 
 		if (recording) {
-			size_t amt = fwrite(read_buf, 1, fill_bytes, ctx.fout);
-			if ((int)amt != fill_bytes) {
-				perror("fwrite");
-				exit(EXIT_FAILURE);
+			if (mp3) {
+				int blen;
+
+				switch (ctx.stream->format) {
+				case SoundIoFormatFloat32LE:
+				case SoundIoFormatFloat32BE:
+					blen = lame_encode_buffer_ieee_float(lame,
+					    (float *)read_buf,
+					    (float *)(read_buf + (fill_bytes / 2)),
+					    fill_bytes / ctx.stream->bytes_per_frame,
+					    mp3buf, MP3_BUF_SIZE);
+					break;
+				case SoundIoFormatU32BE:
+				case SoundIoFormatU32LE:
+					blen = lame_encode_buffer_long2(lame,
+					    (long *)read_buf,
+					    (long *)(read_buf + (fill_bytes / 2)),
+					    fill_bytes / ctx.stream->bytes_per_frame,
+					    mp3buf, MP3_BUF_SIZE);
+					break;
+
+				case SoundIoFormatS32BE:
+				case SoundIoFormatS32LE:
+				case SoundIoFormatS24BE:
+				case SoundIoFormatS24LE:
+				case SoundIoFormatU24BE:
+				case SoundIoFormatU24LE:
+					blen = lame_encode_buffer_int(lame,
+					    (int *)read_buf,
+					    (int *)(read_buf + (fill_bytes / 2)),
+					    fill_bytes / ctx.stream->bytes_per_frame,
+					    mp3buf, MP3_BUF_SIZE);
+					break;
+
+				case SoundIoFormatS16BE:
+				case SoundIoFormatS16LE:
+				case SoundIoFormatU16BE:
+				case SoundIoFormatU16LE:
+					blen = lame_encode_buffer(lame,
+					    (short *)read_buf,
+					    (short *)(read_buf + (fill_bytes / 2)),
+					    fill_bytes / ctx.stream->bytes_per_frame,
+					    mp3buf, MP3_BUF_SIZE);
+					break;
+				default:
+					fprintf(stderr, "Invalid format!\n");
+					exit(EXIT_FAILURE);
+				}
+
+				fwrite(mp3buf, 1, blen, ctx.fout);
+			} else {
+				size_t amt = fwrite(read_buf, 1, fill_bytes, ctx.fout);
+				if ((int)amt != fill_bytes) {
+					perror("fwrite");
+					exit(EXIT_FAILURE);
+				}
 			}
 		}
 		soundio_ring_buffer_advance_read_ptr(ctx.rb, fill_bytes);
@@ -129,6 +178,11 @@ writer(void *priv)
 			break;
 		}
 	}
+
+	int blen = lame_encode_flush(lame, mp3buf, MP3_BUF_SIZE);
+	fwrite(mp3buf, 1, blen, ctx.fout);
+
+	lame_close(lame);
 
 	return NULL;
 }
@@ -180,18 +234,45 @@ audio_record(struct SoundIoInStream *instream, int frame_count_min, int frame_co
 			// silence for the size of the hole.
 			memset(write_ptr, 0, frame_count * instream->bytes_per_frame);
 		} else {
-			for (int frame = 0; frame < frame_count; frame += 1) {
-				ctx.clock++;
-
-				for (int ch = 0; ch < instream->layout.channel_count; ch += 1) {
-					if (muted) {
-						memset(write_ptr, 0, instream->bytes_per_sample);
-					} else {
+			if (muted) {
+				memset(write_ptr, 0, instream->bytes_per_sample *
+				    instream->layout.channel_count * frame_count);
+				ctx.clock += frame_count;
+			} else {
+				/* Don't interleave when outputting MP3 */
+				if (!mp3) {
+					for (int frame = 0; frame < frame_count; frame++) {
+						int ch = 0;
 						memcpy(write_ptr, areas[ch].ptr, instream->bytes_per_sample);
-					}
 
-					areas[ch].ptr += areas[ch].step;
-					write_ptr += instream->bytes_per_sample;
+						if (!ctx.mono) {
+							areas[ch].ptr += areas[ch].step;
+							ch++;
+						}
+						write_ptr += instream->bytes_per_sample;
+
+						memcpy(write_ptr, areas[ch].ptr, instream->bytes_per_sample);
+						write_ptr += instream->bytes_per_sample;
+						areas[ch].ptr += areas[ch].step;
+						ctx.clock++;
+					}
+				} else {
+					int off = frame_count * instream->bytes_per_sample;
+					for (int frame = 0; frame < frame_count; frame++) {
+						int ch = 0;
+						memcpy(write_ptr, areas[ch].ptr, instream->bytes_per_sample);
+
+						if (!ctx.mono) {
+							areas[ch].ptr += areas[ch].step;
+							ch++;
+						}
+
+						memcpy(write_ptr + off, areas[ch].ptr, instream->bytes_per_sample);
+
+						write_ptr += instream->bytes_per_sample;
+						areas[ch].ptr += areas[ch].step;
+						ctx.clock++;
+					}
 				}
 			}
 		}
@@ -250,6 +331,13 @@ audio_toggle_pause(void)
 }
 
 void
+audio_toggle_mp3(void)
+{
+
+	mp3 = !mp3;
+}
+
+void
 audio_toggle_mute(void)
 {
 
@@ -259,11 +347,15 @@ audio_toggle_mute(void)
 void
 audio_start(const char *devid, const char *outfile, int append)
 {
+	const struct SoundIoChannelLayout *stereo, *mono;
 	struct SoundIo *soundio;
 	FILE *fout;
 	int err;
 
 	fout = xfopen(outfile, append ? "ab" : "wb");
+
+	stereo = soundio_channel_layout_get_builtin(SoundIoChannelLayoutIdStereo);
+	mono = soundio_channel_layout_get_builtin(SoundIoChannelLayoutIdMono);
 
 	soundio = soundio_create();
 	if (soundio == NULL) {
@@ -329,6 +421,14 @@ audio_start(const char *devid, const char *outfile, int append)
 		exit(EXIT_FAILURE);
 	}
 
+	if (soundio_device_supports_layout(dev, stereo)) {
+		ctx.stream->layout = *stereo;
+		ctx.mono = 0;
+	} else if (soundio_device_supports_layout(dev, mono)) {
+		ctx.stream->layout = *mono;
+		ctx.mono = 1;
+	}
+
 	for (unsigned i = 0; i < sizeof formats / sizeof formats[0]; i++) {
 		if (formats[i] == SoundIoFormatInvalid) {
 			fprintf(stderr, "Input device supports no usable formats\n");
@@ -380,7 +480,7 @@ audio_start(const char *devid, const char *outfile, int append)
 	ctx.io = soundio;
 	ctx.dev = dev;
 	ctx.rb = soundio_ring_buffer_create(soundio,
-	    60 * 44100 * ctx.stream->bytes_per_frame);
+	    60 * ctx.stream->sample_rate * ctx.stream->bytes_per_frame);
 	
 	if (ctx.rb == NULL) {
 		fprintf(stderr, "Couldn't allocate ring buffer for audio\n");
@@ -451,13 +551,23 @@ audio_list(void)
 
 
 	printf("Available input devices:\n");
+
 	for (int i = 0; i < ndev; i++) {
+		const struct SoundIoChannelLayout *stereo, *mono;
 		struct SoundIoDevice *dev;
 		enum SoundIoFormat fmt;
 		int rate;
 
 		dev = soundio_get_input_device(soundio, i);
 		if (dev->probe_error) {
+			soundio_device_unref(dev);
+			continue;
+		}
+
+		stereo = soundio_channel_layout_get_builtin(SoundIoChannelLayoutIdStereo);
+		mono = soundio_channel_layout_get_builtin(SoundIoChannelLayoutIdMono);
+		if (!soundio_device_supports_layout(dev, stereo) &&
+		    !soundio_device_supports_layout(dev, mono)) {
 			soundio_device_unref(dev);
 			continue;
 		}
@@ -490,7 +600,7 @@ audio_list(void)
 
 		printf("%4d: %s %dHz\n"
 		    "      castty -d '%s' -a audio.%s\n", i, dev->name, rate,
-		    dev->id, stringify_format(fmt));
+		    dev->id, soundio_format_string(fmt));
 		soundio_device_unref(dev);
 	}
 
