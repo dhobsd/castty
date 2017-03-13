@@ -70,7 +70,7 @@ static void *
 writer(void *priv)
 {
 	unsigned char *mp3buf = NULL;
-	lame_t lame;
+	lame_t lame = NULL;
 
 	(void)priv;
 
@@ -179,10 +179,13 @@ writer(void *priv)
 		}
 	}
 
-	int blen = lame_encode_flush(lame, mp3buf, MP3_BUF_SIZE);
-	fwrite(mp3buf, 1, blen, ctx.fout);
+	if (mp3) {
+		int blen = lame_encode_flush(lame, mp3buf, MP3_BUF_SIZE);
+		fwrite(mp3buf, 1, blen, ctx.fout);
 
-	lame_close(lame);
+		lame_close(lame);
+		free(mp3buf);
+	}
 
 	return NULL;
 }
