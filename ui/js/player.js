@@ -122,7 +122,7 @@ var player = function(audioFile, containerElem, termEvents, termInfo) {
 
 				if (Player.paused) {
 					Player.paused = 0;
-					Player.toggle.text("\u23f8");
+					Player.toggle.html('<i class="material-icons">pause</i>');
 					Player.start = Date.now();
 					Player.audio.play();
 					Player.timerHandle =
@@ -140,7 +140,7 @@ var player = function(audioFile, containerElem, termEvents, termInfo) {
 						    getTimeout(Player.timerHandle);
 						clearTimeout(Player.timerHandle);
 					}
-					Player.toggle.text("\u25b6");
+					Player.toggle.html('<i class="material-icons">play_arrow</i>');
 					Player.paused = 1;
 				}
 			}
@@ -199,7 +199,7 @@ var player = function(audioFile, containerElem, termEvents, termInfo) {
 			Player.paused = 1;
 			Player.rem = 0;
 			Player.eventOff = 0;
-			Player.toggle.text("\u21ba");
+			Player.toggle.html('<i class="material-icons">replay</i>');
 
 			clearTimeout(Player.timerHandle);
 			clearTimeout(Player.seekerHandle);
@@ -214,7 +214,7 @@ var player = function(audioFile, containerElem, termEvents, termInfo) {
 		$(Player.audio).on('canplaythrough', function() {
 			Player.startable = 1;
 			if (!Player.restarted) {
-				Player.toggle.text('\u25b6');
+				Player.toggle.html('<i class="material-icons">play_arrow</i>');
 			} else {
 				Player.restarted = 0;
 			}
