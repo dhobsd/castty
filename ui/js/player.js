@@ -44,13 +44,11 @@ var player = function(audioFile, containerElem, termEvents, termInfo) {
 
 		Player.termContainer.css({
 		    margin: '0 auto',
-		    padding: '2px',
 		    width: Player.termWidth
 		});
 
 		Player.controls.css({
 		    margin: '0 auto',
-		    padding: '2px',
 		    width: Player.termWidth
 		});
 
