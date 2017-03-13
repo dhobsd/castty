@@ -25,6 +25,9 @@ broken version of `libsoundio` that depends on a version of JACK that doesn't
 work. This is fixed in the [libsoundio repo](https://github.com/andrewrk/libsoundio),
 but you will have to build it yourself.
 
+CasTTY also depends on [LAME](http://lame.sourceforge.net/) (and in particular,
+libmp3lame) for on-the-fly MP3 encoding.
+
 There are no UI build dependencies because I find that idea a little silly.
 
 ### Make
