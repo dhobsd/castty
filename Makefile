@@ -1,15 +1,21 @@
 CC = gcc
-CFLAGS = -O2 -I/usr/local/include -Wall -Wextra -Wshadow -std=c11 -MMD -MP
 
-TARGET = castty
+WARNINGS := -Wall -Wextra -Wshadow
+
+CPPFLAGS = -I/usr/local/include
+CFLAGS = -O2 -std=c11 -MMD -MP $(WARNINGS)
+LDFLAGS = -L/usr/local/lib
+LDLIBS = -lsoundio -lpthread -lmp3lame
+
+TARGET := castty
 OBJ := audio.o castty.o input.o output.o shell.o xwrap.o
 
 all: $(TARGET)
-
-castty: $(OBJ)
-	$(CC) $(CFLAGS) -o castty $^ -L/usr/local/lib -lsoundio -lpthread -lmp3lame
+$(TARGET): $(OBJ)
 
 clean:
-	rm -f *.o *.d $(TARGET)
+	$(RM) $(OBJ) $(OBJ:.o=.d) $(TARGET)
 
 -include $(OBJ:.o=.d)
+
+.PHONY: all clean
