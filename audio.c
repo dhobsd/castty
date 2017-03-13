@@ -68,6 +68,7 @@ static void *
 writer(void *priv)
 {
 	unsigned char *mp3buf = NULL;
+	size_t buf_size = 0;
 	lame_t lame = NULL;
 
 	(void)priv;
@@ -84,7 +85,8 @@ writer(void *priv)
 			exit(EXIT_FAILURE);
 		}
 
-		mp3buf = malloc((1.25 * BUF_TIME_S * ctx.stream->sample_rate) + 7200);
+		buf_size = (1.25 * BUF_TIME_S * ctx.stream->sample_rate) + 7200;
+		mp3buf = malloc(buf_size);
 		if (mp3buf == NULL) {
 			fprintf(stderr, "No memory for mp3 encoding buffer\n");
 			exit(EXIT_FAILURE);
@@ -122,7 +124,7 @@ writer(void *priv)
 					    (float *)read_buf,
 					    (float *)(read_buf + (fill_bytes / 2)),
 					    fill_bytes / ctx.stream->bytes_per_frame,
-					    mp3buf, MP3_BUF_SIZE);
+					    mp3buf, buf_size);
 					break;
 				case SoundIoFormatU32BE:
 				case SoundIoFormatU32LE:
@@ -130,7 +132,7 @@ writer(void *priv)
 					    (long *)read_buf,
 					    (long *)(read_buf + (fill_bytes / 2)),
 					    fill_bytes / ctx.stream->bytes_per_frame,
-					    mp3buf, MP3_BUF_SIZE);
+					    mp3buf, buf_size);
 					break;
 
 				case SoundIoFormatS32BE:
@@ -143,7 +145,7 @@ writer(void *priv)
 					    (int *)read_buf,
 					    (int *)(read_buf + (fill_bytes / 2)),
 					    fill_bytes / ctx.stream->bytes_per_frame,
-					    mp3buf, MP3_BUF_SIZE);
+					    mp3buf, buf_size);
 					break;
 
 				case SoundIoFormatS16BE:
@@ -154,7 +156,7 @@ writer(void *priv)
 					    (short *)read_buf,
 					    (short *)(read_buf + (fill_bytes / 2)),
 					    fill_bytes / ctx.stream->bytes_per_frame,
-					    mp3buf, MP3_BUF_SIZE);
+					    mp3buf, buf_size);
 					break;
 				default:
 					fprintf(stderr, "Invalid format!\n");
@@ -178,7 +180,7 @@ writer(void *priv)
 	}
 
 	if (mp3) {
-		int blen = lame_encode_flush(lame, mp3buf, MP3_BUF_SIZE);
+		int blen = lame_encode_flush(lame, mp3buf, buf_size);
 		fwrite(mp3buf, 1, blen, ctx.fout);
 
 		lame_close(lame);
