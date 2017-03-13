@@ -12,12 +12,13 @@ void inputproc(int, int);
 void outputproc(int, int, const char *, const char *, const char *, int, int, int);
 void shellproc(const char *, const char *, struct winsize *, int);
 
-void audio_start(const char *devid, const char *outfile, int append);
+double audio_clock_ms(void);
 void audio_list(void);
-void audio_toggle_pause(void);
-void audio_toggle_mute(void);
 void audio_mute(void);
+void audio_start(const char *devid, const char *outfile, int append);
 void audio_stop(void);
+void audio_toggle_mute(void);
+void audio_toggle_pause(void);
 
 void xclose(int);
 int xdup2(int, int);

@@ -88,6 +88,7 @@ static int rates[] = {
 
 static struct audio_ctx {
 	FILE *fout;
+	double clock;
 
 	struct SoundIoInStream *stream;
 	struct SoundIoRingBuffer *rb;
@@ -132,6 +133,13 @@ writer(void *priv)
 	return NULL;
 }
 
+double
+audio_clock_ms(void)
+{
+
+	return (double)(ctx.clock * 1000.) / (double)ctx.stream->sample_rate;
+}
+
 static void
 audio_record(struct SoundIoInStream *instream, int frame_count_min, int frame_count_max)
 {
@@ -153,6 +161,7 @@ audio_record(struct SoundIoInStream *instream, int frame_count_min, int frame_co
 	if (!recording) {
 		int advance_bytes = write_frames * instream->bytes_per_frame;
 		soundio_ring_buffer_advance_write_ptr(ctx.rb, advance_bytes);
+		return;
 	}
 
 	while (1) {
@@ -172,6 +181,8 @@ audio_record(struct SoundIoInStream *instream, int frame_count_min, int frame_co
 			memset(write_ptr, 0, frame_count * instream->bytes_per_frame);
 		} else {
 			for (int frame = 0; frame < frame_count; frame += 1) {
+				ctx.clock++;
+
 				for (int ch = 0; ch < instream->layout.channel_count; ch += 1) {
 					if (muted) {
 						memset(write_ptr, 0, instream->bytes_per_sample);

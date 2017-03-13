@@ -45,12 +45,12 @@ get_command(struct cmdinput *cmd)
 }
 
 static double
-time_delta(struct timeval *prev, struct timeval *now)
+time_delta(struct timeval *prevtv, struct timeval *nowtv)
 {
 	double pms, nms;
 
-	pms = (double)(prev->tv_sec * 1000) + ((double)prev->tv_usec / 1000.);
-	nms = (double)(now->tv_sec * 1000) + ((double)now->tv_usec / 1000.);
+	pms = (double)(prevtv->tv_sec * 1000) + ((double)prevtv->tv_usec / 1000.);
+	nms = (double)(nowtv->tv_sec * 1000) + ((double)nowtv->tv_usec / 1000.);
 
 	return nms - pms;
 }
@@ -59,17 +59,23 @@ void
 outputproc(int masterfd, int controlfd, const char *outfn, const char *audioout,
     const char *devid, int append, int rows, int cols)
 {
-	static struct timeval prev, now;
+	static struct timeval prevtv, nowtv;
 	struct pollfd pollfds[2];
+	double dur, aprev, anow;
 	struct cmdinput cmd;
-	static double dur;
 	char obuf[BUFSIZ];
 	int paused = 0;
 	int first = 1;
 	FILE *evout;
 	int cc;
 
-	if (audioout && devid) {
+	dur = aprev = anow = 0.;
+
+	if (audioout || devid) {
+		assert(audioout && devid);
+	}
+
+	if (audioout) {
 		audio_start(devid, audioout, append);
 	}
 
@@ -165,15 +171,21 @@ outputproc(int masterfd, int controlfd, const char *outfn, const char *audioout,
 					command = get_command(&cmd);
 					switch (command) {
 					case CMD_MUTE:
-						audio_toggle_mute();
+						if (audioout) {
+							audio_toggle_mute();
+						}
 						break;
 
 					case CMD_PAUSE:
 						paused = !paused;
-						audio_toggle_pause();
 						if (!paused) {
-							gettimeofday(&prev, NULL);
-							now = prev;
+							if (!audioout) {
+								gettimeofday(&prevtv, NULL);
+								nowtv = prevtv;
+							} else {
+								anow = aprev = audio_clock_ms();
+								audio_toggle_pause();
+							}
 						}
 						break;
 
@@ -200,15 +212,29 @@ outputproc(int masterfd, int controlfd, const char *outfn, const char *audioout,
 
 				if (!paused) {
 					if (first) {
-						gettimeofday(&prev, NULL);
-						now = prev;
+						if (!audioout) {
+							gettimeofday(&prevtv, NULL);
+							nowtv = prevtv;
+						} else {
+							anow = aprev = audio_clock_ms();
+						}
+
 						first = 0;
 					} else {
-						gettimeofday(&now, NULL);
+						if (!audioout) {
+							gettimeofday(&nowtv, NULL);
+						} else {
+							anow = audio_clock_ms();
+						}
 					}
 
-					dur += time_delta(&prev, &now);
-					prev = now;
+					if (!audioout) {
+						dur += time_delta(&prevtv, &nowtv);
+						prevtv = nowtv;
+					} else {
+						dur += anow - aprev;
+						aprev = anow;
+					}
 
 					fprintf(evout, "\"s\":%0.3f,\"e\":\"", dur);
 
