@@ -76,7 +76,7 @@ outputproc(int masterfd, int controlfd, const char *outfn, const char *audioout,
 	}
 
 	if (audioout) {
-		audio_start(devid, audioout, append);
+		audio_init(devid, audioout);
 	}
 
 	evout = fopen(outfn, append ? "ab" : "wb");
@@ -184,7 +184,11 @@ outputproc(int masterfd, int controlfd, const char *outfn, const char *audioout,
 								nowtv = prevtv;
 							} else {
 								anow = aprev = audio_clock_ms();
-								audio_toggle_pause();
+								audio_start();
+							}
+						} else {
+							if (audioout) {
+								audio_stop();
 							}
 						}
 						break;
@@ -200,7 +204,7 @@ outputproc(int masterfd, int controlfd, const char *outfn, const char *audioout,
 				}
 			} else if (pollfds[i].fd == masterfd) {
 				if (audioout && first) {
-					audio_toggle_pause();
+					audio_start();
 				}
 
 				cc = read(masterfd, obuf, BUFSIZ);

@@ -47,6 +47,7 @@ static int rates[] = {
 };
 
 static struct audio_ctx {
+	const char *devid;
 	FILE *fout;
 	double clock;
 	int mono;
@@ -174,6 +175,7 @@ writer(void *priv)
 		}
 		soundio_ring_buffer_advance_read_ptr(ctx.rb, fill_bytes);
 
+		usleep(10);
 		if (post > 0) {
 			break;
 		}
@@ -216,7 +218,8 @@ audio_record(struct SoundIoInStream *stream, int min_frames, int max_frames)
 	int remaining = to_write;
 
 	if (!recording) {
-		soundio_ring_buffer_advance_write_ptr(ctx.rb, to_write * stream->bytes_per_frame);
+		soundio_ring_buffer_advance_write_ptr(ctx.rb,
+		    to_write * stream->bytes_per_frame);
 		return;
 	}
 
@@ -274,7 +277,6 @@ audio_record(struct SoundIoInStream *stream, int min_frames, int max_frames)
 static void *
 reader(void *priv)
 {
-	int err;
 
 	(void)priv;
 
@@ -283,31 +285,17 @@ reader(void *priv)
 		usleep(10);
 	}
 
-	err = soundio_instream_start(ctx.stream);
-	if (err) {
-		fprintf(stderr, "Error recording: %s\n", soundio_strerror(err));
-		exit(EXIT_FAILURE);
-	}
-
 	while (1) {
 		soundio_flush_events(ctx.io);
-		usleep(1000);
+		usleep(100);
 
 		if (post > 0) {
-			soundio_flush_events(ctx.io);
-			usleep(10000);
+			usleep(1000);
 			break;
 		}
 	}
 
 	return NULL;
-}
-
-void
-audio_toggle_pause(void)
-{
-
-	recording = !recording;
 }
 
 void
@@ -325,101 +313,101 @@ audio_toggle_mute(void)
 }
 
 void
-audio_start(const char *devid, const char *outfile, int append)
+audio_start(void)
 {
-	const struct SoundIoChannelLayout *stereo, *mono;
-	struct SoundIo *soundio;
-	FILE *fout;
+	static const struct SoundIoChannelLayout *stereo, *mono;
 	int err;
 
-	fout = xfopen(outfile, append ? "ab" : "wb");
+	if (stereo == NULL) {
+		stereo = soundio_channel_layout_get_builtin(SoundIoChannelLayoutIdStereo);
+		mono = soundio_channel_layout_get_builtin(SoundIoChannelLayoutIdMono);
+	}
 
-	stereo = soundio_channel_layout_get_builtin(SoundIoChannelLayoutIdStereo);
-	mono = soundio_channel_layout_get_builtin(SoundIoChannelLayoutIdMono);
-
-	soundio = soundio_create();
-	if (soundio == NULL) {
+	ctx.io = soundio_create();
+	if (ctx.io == NULL) {
 		fprintf(stderr, "Couldn't initialize audio\n");
-		fclose(fout);
 		exit(EXIT_FAILURE);
 	}
 
-	if ((err = soundio_connect(soundio))) {
+	if ((err = soundio_connect(ctx.io))) {
 		fprintf(stderr, "Couldn't connect to audio backend: %s",
 		    soundio_strerror(err));
-		fclose(fout);
 		exit(EXIT_FAILURE);
 	}
 
-	soundio_flush_events(soundio);
+	soundio_flush_events(ctx.io);
 
-	int ndev = soundio_input_device_count(soundio);
+	int ndev = soundio_input_device_count(ctx.io);
 	if (ndev == 0) {
 		fprintf(stderr, "No input devices available.\n");
-		soundio_disconnect(soundio);
-		soundio_destroy(soundio);
-		fclose(fout);
+		soundio_disconnect(ctx.io);
+		soundio_destroy(ctx.io);
 		exit(EXIT_FAILURE);
 	}
 
-	struct SoundIoDevice *dev = NULL;
 	for (int i = 0; i < ndev; i++) {
-		dev = soundio_get_input_device(soundio, i);
-		if (!strcmp(dev->id, devid)) {
+		ctx.dev = soundio_get_input_device(ctx.io, i);
+		if (!strcmp(ctx.dev->id, ctx.devid)) {
 			break;
 		}
 
-		soundio_device_unref(dev);
-		dev = NULL;
+		soundio_device_unref(ctx.dev);
+		ctx.dev = NULL;
 	}
 
-	if (dev == NULL) {
+	if (ctx.dev == NULL) {
 		fprintf(stderr, "Couldn't find requested device\n");
-		soundio_disconnect(soundio);
-		soundio_destroy(soundio);
-		xfclose(fout);
+		soundio_device_unref(ctx.dev);
+		soundio_disconnect(ctx.io);
+		soundio_destroy(ctx.io);
 		exit(EXIT_FAILURE);
 	}
 
-	if (dev->probe_error) {
+	if (ctx.dev->probe_error) {
 		fprintf(stderr, "Device error while probing: %s\n",
-		    soundio_strerror(dev->probe_error));
-		soundio_disconnect(soundio);
-		soundio_destroy(soundio);
-		xfclose(fout);
+		    soundio_strerror(ctx.dev->probe_error));
+		soundio_device_unref(ctx.dev);
+		soundio_disconnect(ctx.io);
+		soundio_destroy(ctx.io);
 		exit(EXIT_FAILURE);
 	}
 
-	soundio_device_sort_channel_layouts(dev);
+	soundio_device_sort_channel_layouts(ctx.dev);
 
-	ctx.stream = soundio_instream_create(dev);
+	ctx.stream = soundio_instream_create(ctx.dev);
 	if (ctx.stream == NULL) {
 		fprintf(stderr, "Couldn't create stream\n");
-		soundio_disconnect(soundio);
-		soundio_destroy(soundio);
-		xfclose(fout);
+		soundio_device_unref(ctx.dev);
+		soundio_disconnect(ctx.io);
+		soundio_destroy(ctx.io);
 		exit(EXIT_FAILURE);
 	}
 
-	if (soundio_device_supports_layout(dev, stereo)) {
+	if (soundio_device_supports_layout(ctx.dev, stereo)) {
 		ctx.stream->layout = *stereo;
 		ctx.mono = 0;
-	} else if (soundio_device_supports_layout(dev, mono)) {
+	} else if (soundio_device_supports_layout(ctx.dev, mono)) {
 		ctx.stream->layout = *mono;
 		ctx.mono = 1;
+	} else {
+		fprintf(stderr, "Sound device doesn't support stereo"
+		    " or mono.\n");
+		soundio_device_unref(ctx.dev);
+		soundio_disconnect(ctx.io);
+		soundio_destroy(ctx.io);
+		exit(EXIT_FAILURE);
 	}
 
 	for (unsigned i = 0; i < sizeof formats / sizeof formats[0]; i++) {
 		if (formats[i] == SoundIoFormatInvalid) {
 			fprintf(stderr, "Input device supports no usable formats\n");
 			soundio_instream_destroy(ctx.stream);
-			soundio_disconnect(soundio);
-			soundio_destroy(soundio);
-			xfclose(fout);
+			soundio_disconnect(ctx.io);
+			soundio_destroy(ctx.io);
 			exit(EXIT_FAILURE);
 		}
 
-		if (soundio_device_supports_format(dev, formats[i])) {
+		if (soundio_device_supports_format(ctx.dev, formats[i])) {
 			ctx.stream->format = formats[i];
 			break;
 		}
@@ -428,19 +416,18 @@ audio_start(const char *devid, const char *outfile, int append)
 	for (unsigned i = 0; i < sizeof rates / sizeof rates[0]; i++) {
 		if (rates[i] == 0) {
 			fprintf(stderr, "Input device supports no usable rates\n");
+			soundio_device_unref(ctx.dev);
 			soundio_instream_destroy(ctx.stream);
-			soundio_disconnect(soundio);
-			soundio_destroy(soundio);
-			xfclose(fout);
+			soundio_disconnect(ctx.io);
+			soundio_destroy(ctx.io);
 			exit(EXIT_FAILURE);
 		}
 
-		if (soundio_device_supports_sample_rate(dev, rates[i])) {
+		if (soundio_device_supports_sample_rate(ctx.dev, rates[i])) {
 			ctx.stream->sample_rate = rates[i];
 			break;
 		}
 	}
-
 
 	ctx.stream->read_callback = audio_record;
 	ctx.stream->overflow_callback = NULL;
@@ -449,55 +436,83 @@ audio_start(const char *devid, const char *outfile, int append)
 	if ((err = soundio_instream_open(ctx.stream))) {
 		fprintf(stderr, "Couldn't open stream: %s\n",
 		    soundio_strerror(err));
+		soundio_device_unref(ctx.dev);
 		soundio_instream_destroy(ctx.stream);
-		soundio_disconnect(soundio);
-		soundio_destroy(soundio);
-		xfclose(fout);
+		soundio_disconnect(ctx.io);
+		soundio_destroy(ctx.io);
 		exit(EXIT_FAILURE);
 	}
 
-	ctx.fout = fout;
-	ctx.io = soundio;
-	ctx.dev = dev;
-	ctx.rb = soundio_ring_buffer_create(soundio,
-	    BUF_TIME_S * ctx.stream->sample_rate * ctx.stream->bytes_per_frame);
-	
+	ctx.rb = soundio_ring_buffer_create(ctx.io,
+		BUF_TIME_S * ctx.stream->sample_rate * ctx.stream->bytes_per_frame);
 	if (ctx.rb == NULL) {
-		fprintf(stderr, "Couldn't allocate ring buffer for audio\n");
+		fprintf(stderr, "\rCouldn't allocate ring buffer for audio\r");
+		soundio_device_unref(ctx.dev);
 		soundio_instream_destroy(ctx.stream);
-		soundio_disconnect(soundio);
-		soundio_destroy(soundio);
-		xfclose(fout);
+		soundio_disconnect(ctx.io);
+		soundio_destroy(ctx.io);
 		exit(EXIT_FAILURE);
 	}
+
+	err = soundio_instream_start(ctx.stream);
+	if (err) {
+		fprintf(stderr, "Error recording: %s\n", soundio_strerror(err));
+		exit(EXIT_FAILURE);
+	}
+
+	recording = 1;
 
 	if (pthread_create(&wthread, NULL, writer, NULL) != 0) {
 		perror("pthread_create");
+		soundio_device_unref(ctx.dev);
+		soundio_instream_destroy(ctx.stream);
+		soundio_disconnect(ctx.io);
+		soundio_destroy(ctx.io);
+		xfclose(ctx.fout);
 		exit(EXIT_FAILURE);
 	}
 
 	if (pthread_create(&rthread, NULL, reader, NULL) != 0) {
 		perror("pthread_create");
+		soundio_device_unref(ctx.dev);
+		soundio_instream_destroy(ctx.stream);
+		soundio_disconnect(ctx.io);
+		soundio_destroy(ctx.io);
+		xfclose(ctx.fout);
 		exit(EXIT_FAILURE);
 	}
 
 	while (post) {
-		usleep(1000);
+		usleep(10);
 	}
+}
+
+void
+audio_init(const char *devid, const char *outfile)
+{
+
+	ctx.fout = xfopen(outfile, "wb");
+	ctx.devid = devid;
 }
 
 void
 audio_stop(void)
 {
 
-	post++;
+	post = 2;
 
 	pthread_join(wthread, NULL);
 	pthread_join(rthread, NULL);
 
 	soundio_instream_destroy(ctx.stream);
-	soundio_disconnect(ctx.io);
+	soundio_device_unref(ctx.dev);
 	soundio_destroy(ctx.io);
+}
+
+void
+audio_exit(void)
+{
+
 	xfclose(ctx.fout);
 }
 
