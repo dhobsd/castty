@@ -58,35 +58,33 @@ look something like this:
           castty -d 'AppleHDAEngineInput:1B,0,1,0:1' -a audio.f32le
 
 The `-d 'AppleHDAEngineInput:1B,0,1,0:1'` argument can be pasted directly to
-castty to choose that device for recording. The audio format and sample rate
-castty will use is also provided.
+CasTTY to choose that device for recording. The audio format and sample rate
+CasTTY will use is also provided.
+
+CasTTY supports MP3 output by default, but other encodings may be desirable.
+Without the `-m` flag, CasTTY outputs interleaved PCM audio. (CasTTY upgrades
+mono audio to stereo.)
 
 Utilities like [sox](http://sox.sourceforge.net/) may be used to convert the
 audio into more useful formats for web publication.
 
     % sox -D -r 44100 -e signed -b 16 -c 2 -L audio.raw audio.wav
 
-You may of course wish to compress further. There are numerous utilities to
-help here, but that's a bit out of scope.
-
-By default, castty does _not_ record audio and sends its terminal event output
+By default, CasTTY does _not_ record audio and sends its terminal event output
 to a file called `events.js`.
 
 ### Runtime Commands
 
-CasTTY contains a runtime command interface. Commands are entered by first
-pressing `^a` and then typing the command. All commands begin with a colon. To
-send a literal `^a` to your shell, you can either type `^a^a` or `^aa` (in
-case you're using screen or emacs or tmux with screen keybindings). Currently
-supported commands include:
+CasTTY contains a runtime command interface. Commands are entered with the
+sequence `^a` (`C-a`, `Control-a`), followed by the command character.
+Currently supported commands are:
 
- * `:mute`: A toggle to mute or unmute audio input. This literally writes empty
-   audio to the output; it does not stop recording.
-
- * `:pause`: A toggle to pause or unpause recording entirely. This stops audio
-   recording and recording events in the shell. You may continue to use the
-   shell until you unpause, but if you unpause with the terminal in a
-   different state, things will probably get wacky.
+ * `^a`: Send a literal `^a` to the recorded session.
+ * `a`: Send a literal `^a` to the recorded session.
+ * `m`: Mute or unmute the recording. Recording will continue, but without any
+   audio until unmuted.
+ * `p`: Pause or unpause the recording. Neither terminal nor audio will be
+   recorded during the paused period.
 
 ## Web Interface
 

@@ -48,8 +48,9 @@ static int rates[] = {
 
 static struct audio_ctx {
 	const char *devid;
-	FILE *fout;
 	double clock;
+	FILE *fout;
+	int active;
 	int mono;
 
 	struct SoundIoInStream *stream;
@@ -309,6 +310,10 @@ void
 audio_toggle_mute(void)
 {
 
+	if (!ctx.active) {
+		return;
+	}
+
 	muted = !muted;
 }
 
@@ -317,6 +322,10 @@ audio_start(void)
 {
 	static const struct SoundIoChannelLayout *stereo, *mono;
 	int err;
+
+	if (!ctx.active) {
+		return;
+	}
 
 	if (stereo == NULL) {
 		stereo = soundio_channel_layout_get_builtin(SoundIoChannelLayoutIdStereo);
@@ -491,6 +500,7 @@ void
 audio_init(const char *devid, const char *outfile)
 {
 
+	ctx.active = 1;
 	ctx.fout = xfopen(outfile, "wb");
 	ctx.devid = devid;
 }
@@ -498,6 +508,13 @@ audio_init(const char *devid, const char *outfile)
 void
 audio_stop(void)
 {
+
+	if (!ctx.active) {
+		return;
+	}
+
+	soundio_flush_events(ctx.io);
+	usleep(100);
 
 	post = 2;
 

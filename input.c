@@ -14,18 +14,17 @@ inputproc(int masterfd, int controlfd)
 		STATE_PASSTHROUGH,
 		STATE_COMMAND,
 	} input_state;
-	ssize_t cc;
+	ssize_t nread;
 
 	input_state = STATE_PASSTHROUGH;
 	cmdbytes = 0;
 
-	while ((cc = read(STDIN_FILENO, ibuf, BUFSIZ)) > 0) {
+	while ((nread = read(STDIN_FILENO, ibuf, BUFSIZ)) > 0) {
 		unsigned char *cmdstart;
-		unsigned char *cmdend;
 
 		p = ibuf;
 
-		cmdstart = memchr(ibuf, 0x01, cc);
+		cmdstart = memchr(ibuf, 0x01, nread);
 		if (cmdstart) {
 			switch (input_state) {
 			case STATE_PASSTHROUGH:
@@ -36,7 +35,7 @@ inputproc(int masterfd, int controlfd)
 					xwrite(masterfd, ibuf, cmdstart - ibuf);
 				}
 				cmdstart++;
-				cc -= (cmdstart - ibuf);
+				nread -= (cmdstart - ibuf);
 
 				p = cmdstart;
 				input_state = STATE_COMMAND;
@@ -49,38 +48,40 @@ inputproc(int masterfd, int controlfd)
 
 		switch (input_state) {
 		case STATE_PASSTHROUGH:
-			xwrite(masterfd, ibuf, cc);
+			xwrite(masterfd, ibuf, nread);
 			break;
 
 		case STATE_COMMAND:
-			cmdend = memchr(p, '\r', cc);
-			if (cmdend) {
-				xwrite(controlfd, p, cmdend - p + 1);
-				cmdend++;
+			if (nread) {
+				enum control_command cmd = CMD_NONE;
 
-				if (cmdend - p + 1 < cc) {
-					xwrite(masterfd, p + 1, cc - (cmdend - p));
+				switch (*p) {
+				/* Passthrough a literal ^a */
+				case 'a':
+				case  0x01:
+					cmd = CMD_CTRL_A;
+					break;
+				case 'p':
+					cmd = CMD_PAUSE;
+					break;
+				case 'm':
+					cmd = CMD_MUTE;
+					break;
+				default:
+					input_state = STATE_PASSTHROUGH;
+					break;
+				}
+
+				if (cmd != CMD_NONE) {
+					xwrite(controlfd, &cmd, sizeof cmd);
+				}
+
+				if (nread > 1) {
+					xwrite(masterfd, p + 1, nread - 1);
 				}
 
 				input_state = STATE_PASSTHROUGH;
-				cmdbytes = 0;
-			} else {
-				if (cc) {
-					/* Hack. ^aa and ^a^a send a literal ^a without
-					 * causing the output side to go into command mode.
-					 */
-					if (cmdbytes == 0 && (*p == 'a' || *p == 0x01)) {
-						char byte = 0x01;
-						xwrite(masterfd, &byte, 1);
-
-						input_state = STATE_PASSTHROUGH;
-					} else {
-						cmdbytes += cc;
-						xwrite(controlfd, p, cc);
-					}
-				}
 			}
-
 			break;
 		}
 
