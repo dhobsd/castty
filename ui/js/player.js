@@ -71,7 +71,7 @@ var player = function(audioFile, containerElem, termEvents, termInfo) {
 			var str = "";
 			while (i < Player.termEvents.length &&
 			    Player.termEvents[i].s <= t) {
-				str += Player.termEvents[i++].e;
+				str += decodeURIComponent(Player.termEvents[i++].e);
 			}
 
 			i = i == Player.termEvents.length ? i - 1 : i;
@@ -83,7 +83,7 @@ var player = function(audioFile, containerElem, termEvents, termInfo) {
 		};
 
 		Player.nextEvent = function() {
-			Player.term.write(Player.termEvents[Player.eventOff].e);
+			Player.term.write(decodeURIComponent(Player.termEvents[Player.eventOff].e));
 
 			if (Player.termEvents[Player.eventOff + 1]) {
 				Player.timerHandle = setTimeout(Player.nextEvent,

@@ -102,7 +102,7 @@ handle_input(char *buf, size_t buflen)
 				fputc('\\', evout);
 			default:
 				if (!isprint(buf[j])) {
-					fprintf(evout, "\\x%02hhx", buf[j]);
+					fprintf(evout, "%%%02hhx", buf[j]);
 				} else {
 					fputc(buf[j], evout);
 				}

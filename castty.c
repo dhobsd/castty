@@ -45,7 +45,7 @@ set_raw_input(void)
 	struct termios rtt;
 
 	rtt = tt;
-	rtt.c_iflag &= ~(IGNBRK|BRKINT|PARMRK|ISTRIP|INLCR|IGNCR|ICRNL|IXON);
+	rtt.c_iflag &= ~(IGNBRK|BRKINT|PARMRK|INLCR|IGNCR|ICRNL|IXON);
 	rtt.c_oflag &= ~OPOST;
 	rtt.c_lflag &= ~(ECHO|ECHONL|ICANON|ISIG|IEXTEN);
 	rtt.c_cflag &= ~(CSIZE|PARENB);
