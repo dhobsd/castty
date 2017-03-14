@@ -16,15 +16,20 @@ static struct timeval prevtv, nowtv;
 static int paused, audio_enabled;
 static double aprev, anow, dur;
 static FILE *evout;
+static int master;
 
 static void
 handle_command(enum control_command cmd)
 {
-	static char c_a = 0x1;
+	static char c_a = 0x01;
 
 	switch (cmd) {
 	case CMD_CTRL_A:
-		xwrite(STDOUT_FILENO, &c_a, 1);
+		/* Can't just write this to STDOUT_FILENO; this has to be
+		 * written to the master end of the tty, otherwise it's 
+		 * ignored.
+		 */
+		xwrite(master, &c_a, 1);
 		break;
 
 	case CMD_MUTE:
@@ -124,6 +129,7 @@ outputproc(int masterfd, int controlfd, const char *outfn, const char *audioout,
 	int status;
 
 	status = EXIT_SUCCESS;
+	master = masterfd;
 
 	if (audioout || devid) {
 		assert(audioout && devid);
