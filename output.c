@@ -99,7 +99,9 @@ handle_input(char *buf, size_t buflen)
 		switch (buf[j]) {
 			case '"':
 			case '\\':
-				fputc('\\', evout);
+			case '%':
+			      fprintf(evout, "%%%02hhx", buf[j]);
+			      break;
 			default:
 				if (!isprint(buf[j])) {
 					fprintf(evout, "%%%02hhx", buf[j]);
