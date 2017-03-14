@@ -22,20 +22,14 @@ static void
 handle_sigchld(int sig)
 {
 	int status;
-	int pid;
-	int die = 0;
+	pid_t pid;
 
 	(void)sig;
 
-	while ((pid = waitpid(-1, (int *)&status, WNOHANG)) > 0) {
-		if (pid == child) {
-			die = 1;
+	while ((pid = waitpid(-1, &status, WNOHANG)) > 0) {
+		if (pid == child || pid == subchild) {
+			close(STDIN_FILENO);
 		}
-	}
-
-	if (die) {
-		xtcsetattr(0, TCSAFLUSH, &tt);
-		exit(EXIT_SUCCESS);
 	}
 }
 
