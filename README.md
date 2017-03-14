@@ -86,6 +86,15 @@ Currently supported commands are:
  * `p`: Pause or unpause the recording. Neither terminal nor audio will be
    recorded during the paused period.
 
+### Miscellaneous
+
+CasTTY does support window resizing. However, because the size of the player
+is automatically calculated based on the size of the original window, the
+recorded window size can only ever be as large or smaller than the original
+window size.
+
+CasTTY supports UTF-8 input.
+
 ## Web Interface
 
 The `ui` directory of the repository is a self-contained implementation of a
