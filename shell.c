@@ -50,7 +50,7 @@ shellproc(const char *shell, const char *exec_cmd, struct winsize *win, int mast
 		goto end;
 	}
 
-	if (ioctl(slavefd, TIOCSWINSZ, win)) {
+	if (ioctl(slavefd, TIOCSWINSZ, win) == -1) {
 		perror("ioctl(TIOCSWINSZ)");
 		goto end;
 	}

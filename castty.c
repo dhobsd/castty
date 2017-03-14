@@ -1,5 +1,6 @@
 #include <sys/types.h>
 #include <sys/ioctl.h>
+#include <sys/signal.h>
 #include <sys/wait.h>
 
 #include <stdio.h>
@@ -15,8 +16,10 @@
 
 #include "castty.h"
 
+static struct winsize owin, rwin, win;
 static pid_t child, subchild;
 static struct termios tt;
+static int masterfd;
 
 static void
 handle_sigchld(int sig)
@@ -29,6 +32,26 @@ handle_sigchld(int sig)
 	while ((pid = waitpid(-1, &status, WNOHANG)) > 0) {
 		if (pid == child || pid == subchild) {
 			close(STDIN_FILENO);
+		}
+	}
+}
+
+static void
+handle_sigwinch(int sig)
+{
+
+	(void)sig;
+
+	if (ioctl(STDIN_FILENO, TIOCGWINSZ, &rwin) == -1) {
+		perror("ioctl(TIOCGWINSZ)");
+		exit(EXIT_FAILURE);
+	}
+
+	if (rwin.ws_col <= owin.ws_col || rwin.ws_row < owin.ws_row) {
+		win = rwin;
+		if (ioctl(masterfd, TIOCSWINSZ, &win) == -1) {
+			perror("ioctl(TIOCSWINSZ)");
+			exit(EXIT_FAILURE);
 		}
 	}
 }
@@ -54,8 +77,7 @@ int
 main(int argc, char **argv)
 {
 	char *exec_cmd, *audioout, *outfile, *devid;
-	int ch, masterfd, controlfd[2];
-	struct winsize owin, win;
+	int ch, controlfd[2];
 	extern char *optarg;
 	extern int optind;
 	long rows, cols;
@@ -156,7 +178,7 @@ main(int argc, char **argv)
 		exit(EXIT_FAILURE);
 	}
 
-	owin = win;
+	rwin = owin = win;
 
 	if (!rows || rows > win.ws_row) {
 		rows = win.ws_row;
@@ -208,13 +230,16 @@ main(int argc, char **argv)
 			/* Run the shell in the child */
 			shellproc(shell, exec_cmd, &win, masterfd);
 		}
+	} else {
+		signal(SIGWINCH, handle_sigwinch);
 	}
 
 	xclose(controlfd[0]);
-
 	inputproc(masterfd, controlfd[1]);
 
-	if (ioctl(STDOUT_FILENO, TIOCSWINSZ, &owin) == -1) {
+	signal(SIGWINCH, NULL);
+
+	if (ioctl(STDOUT_FILENO, TIOCSWINSZ, &rwin) == -1) {
 		perror("ioctl(TIOCSWINSZ)");
 	}
 

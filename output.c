@@ -119,6 +119,9 @@ outputproc(int masterfd, int controlfd, const char *outfn, const char *audioout,
 {
 	struct pollfd pollfds[2];
 	char obuf[BUFSIZ];
+	int status;
+
+	status = EXIT_SUCCESS;
 
 	if (audioout || devid) {
 		assert(audioout && devid);
@@ -132,6 +135,7 @@ outputproc(int masterfd, int controlfd, const char *outfn, const char *audioout,
 	evout = fopen(outfn, append ? "ab" : "wb");
 	if (evout == NULL) {
 		perror("fopen");
+		status = EXIT_FAILURE;
 		goto end;
 	}
 
@@ -170,11 +174,13 @@ outputproc(int masterfd, int controlfd, const char *outfn, const char *audioout,
 		nready = poll(pollfds, 2, -1);
 		if (nready == -1) {
 			perror("poll");
+			status = EXIT_FAILURE;
 			goto end;
 		}
 
 		for (int i = 0; i < 2; i++) {
 			if ((pollfds[i].revents & (POLLHUP | POLLERR | POLLNVAL))) {
+				status = EXIT_FAILURE;
 				goto end;
 			}
 
@@ -189,6 +195,7 @@ outputproc(int masterfd, int controlfd, const char *outfn, const char *audioout,
 				nread = read(controlfd, &cmd, sizeof cmd);
 				if (nread == -1 || nread != sizeof cmd) {
 					perror("read");
+					status = EXIT_FAILURE;
 					goto end;
 				}
 
@@ -198,6 +205,7 @@ outputproc(int masterfd, int controlfd, const char *outfn, const char *audioout,
 
 				nread = read(masterfd, obuf, BUFSIZ);
 				if (nread <= 0) {
+					status = EXIT_FAILURE;
 					goto end;
 				}
 
@@ -220,5 +228,5 @@ end:
 	xfclose(evout);
 	xclose(masterfd);
 
-	return;
+	exit(status);
 }
