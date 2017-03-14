@@ -74,9 +74,9 @@ handle_input(char *buf, size_t buflen)
 		first = 0;
 	} else {
 		if (audio_enabled) {
-			gettimeofday(&nowtv, NULL);
-		} else {
 			anow = audio_clock_ms();
+		} else {
+			gettimeofday(&nowtv, NULL);
 		}
 	}
 
@@ -119,8 +119,6 @@ outputproc(int masterfd, int controlfd, const char *outfn, const char *audioout,
 {
 	struct pollfd pollfds[2];
 	char obuf[BUFSIZ];
-
-	dur = aprev = anow = 0.;
 
 	if (audioout || devid) {
 		assert(audioout && devid);

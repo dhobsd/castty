@@ -197,7 +197,7 @@ double
 audio_clock_ms(void)
 {
 
-	return (double)(ctx.clock * 1000.) / (double)ctx.stream->sample_rate;
+	return (ctx.clock * 1000.) / (double)ctx.stream->sample_rate;
 }
 
 static void
