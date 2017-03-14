@@ -83,15 +83,21 @@ var player = function(audioFile, containerElem, termEvents, termInfo) {
 		};
 
 		Player.nextEvent = function() {
-			Player.term.write(decodeURIComponent(Player.termEvents[Player.eventOff].e));
-
-			if (Player.termEvents[Player.eventOff + 1]) {
-				Player.timerHandle = setTimeout(Player.nextEvent,
-				    (Player.termEvents[Player.eventOff + 1].s -
-				     Player.audio.currentTime * 1000));
+			var str = "";
+			while (Player.eventOff < Player.termEvents.length &&
+			    Player.termEvents[Player.eventOff].s < Player.audio.currentTime * 1000) {
+				str += decodeURIComponent(Player.termEvents[Player.eventOff].e);
+				Player.eventOff++;
 			}
 
-			Player.eventOff++;
+			Player.term.write(str);
+
+			if (Player.eventOff < Player.termEvents.length &&
+			    Player.termEvents[Player.eventOff]) {
+				Player.timerHandle = setTimeout(Player.nextEvent,
+				    (Player.termEvents[Player.eventOff].s -
+				     Player.audio.currentTime * 1000));
+			}
 		}
 
 		Player.updateSeeker = function() {
