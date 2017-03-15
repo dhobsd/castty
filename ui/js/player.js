@@ -191,7 +191,7 @@ var player = function(audioFile, containerElem, events) {
 			}
 		});
 
-		Player.duration = events.duration;
+		Player.duration = events.duration * 1000;
 		Player.seeker = $('<input type="range" min="0" max="' +
 		    Player.duration + '" step="' + Player.duration / 1000 +
 		    '" value="0">').appendTo(Player.controls);

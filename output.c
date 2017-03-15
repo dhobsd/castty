@@ -258,7 +258,7 @@ outputproc(struct outargs *oa)
 	}
 
 end:
-	fprintf(evout, "],\n \"duration\":%0.3f}", dur);
+	fprintf(evout, "],\n \"duration\":%0.3f}", dur / 1000);
 
 	fflush(evout);
 
