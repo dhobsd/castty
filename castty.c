@@ -49,6 +49,14 @@ do_backtrace(int sig, siginfo_t *siginfo, void *context)
 	fprintf(stderr, "\r\n");
 	free(strs);
 
+	if (ioctl(STDOUT_FILENO, TIOCSWINSZ, &rwin) == -1) {
+		perror("ioctl(TIOCSWINSZ)");
+	}
+
+	if (tcsetattr(STDOUT_FILENO, TCSAFLUSH, &tt) == -1) {
+		perror("tcsetattr");
+	}
+
 	exit(EXIT_FAILURE);
 }
 
