@@ -38,7 +38,7 @@ installed to a location other than `/usr/local/`, you will have to edit the
 
 ## Usage
 
-    usage: castty [-adlcre] [out.js]
+    usage: castty [-acdelrt] [out.json]
      -a <outfile>   Output audio to <outfile>. Must be specified with -d.
      -c <cols>      Use <cols> columns in the recorded shell session.
      -d <device>    Use audio device <device> for input.
@@ -46,9 +46,10 @@ installed to a location other than `/usr/local/`, you will have to edit the
      -l             List available audio input devices and exit.
      -m             Encode audio to mp3 before writing.
      -r <rows>      Use <rows> rows in the recorded shell session.
+     -t <title>     Title of the cast.
     
-     [out.js]       Optional output filename of recorded events. If not specified,
-                    a file "events.js" will be created.
+     [out.json]     Optional output filename of recorded events. If not specified,
+                    a file "events.json" will be created.
 
 To list usable input devices for recording, just run `castty -l`. Output will
 look something like this:
@@ -94,6 +95,11 @@ recorded window size can only ever be as large or smaller than the original
 window size.
 
 CasTTY supports UTF-8 input.
+
+CasTTY outputs in
+[asciicast v1](https://github.com/asciinema/asciinema/blob/master/doc/asciicast-v1.md)
+format. Its output files should be compatible with the asciinema player
+(though that player does not support audio).
 
 ## Web Interface
 

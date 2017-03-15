@@ -16,6 +16,8 @@
 
 #include "castty.h"
 
+extern char **environ;
+
 static struct winsize owin, rwin, win;
 static pid_t child, subchild;
 static struct termios tt;
@@ -73,39 +75,136 @@ set_raw_input(void)
 	xtcsetattr(STDIN_FILENO, TCSAFLUSH, &rtt);
 }
 
+static char *
+escape(const char *from)
+{
+	unsigned i, o;
+	char *p;
+
+	p = malloc(strlen(from) * 2 + 1);
+	if (p == NULL) {
+		perror("malloc");
+		exit(EXIT_FAILURE);
+	}
+
+	for (i = 0, o = 0; i < strlen(from); i++) {
+		switch (from[i]) {
+		case '\\':
+		case '"':
+			p[o++] = '\\';
+		default:
+			p[o++] = from[i];
+		}
+	}
+
+	p[o] = '\0';
+
+	return p;
+}
+
+static char *
+serialize_env(void)
+{
+	size_t o = 0, s = 1024;
+	char *p;
+
+	p = malloc(s);
+	if (p == NULL) {
+		perror("malloc");
+		exit(EXIT_FAILURE);
+	}
+
+	p[o++] = '{';
+
+	for (unsigned i = 0; environ[i] != NULL; i++) {
+		char *e, *k, *v;
+		size_t l;
+
+		e = escape(environ[i]);
+		l = strlen(e);
+
+		k = e;
+		v = strchr(e, '=');
+		if (v == NULL) {
+			fprintf(stderr, "Your environment is whack.\n");
+			exit(EXIT_FAILURE);
+		}
+
+		*v = '\0';
+		v++;
+
+		/* 7 is for two sets of quotes, a colon, a comma, and a 0 byte */
+		if (o + l + 7 >= s) {
+			size_t ns;
+			char *r;
+
+			ns = s + l + 1025;
+			r = realloc(p, ns);
+			if (r == NULL) {
+				perror("realloc");
+				exit(EXIT_FAILURE);
+			}
+
+			s = ns;
+			p = r;
+		}
+
+		p[o++] = '"';
+		memcpy(p + o, k, strlen(k));
+		o += strlen(k);
+		p[o++] = '"';
+		p[o++] = ':';
+		p[o++] = '"';
+		memcpy(p + o, v, strlen(v));
+		o += strlen(v);
+		p[o++] = '"';
+		if (environ[i + 1]) {
+			p[o++] = ',';
+		}
+
+		free(e);
+	}
+
+	p[o++] = '}';
+
+	return p;
+}
+
 int
 main(int argc, char **argv)
 {
-	char *exec_cmd, *audioout, *outfile, *devid;
 	int ch, controlfd[2];
 	extern char *optarg;
 	extern int optind;
-	long rows, cols;
+	struct outargs oa;
+	char *exec_cmd;
 
-	exec_cmd = audioout = devid = NULL;
-	rows = cols = 0;
+	memset(&oa, 0, sizeof oa);
+	oa.env = serialize_env();
+	exec_cmd = NULL;
 
-	while ((ch = getopt(argc, argv, "?a:c:d:e:hlmr:")) != EOF) {
+	while ((ch = getopt(argc, argv, "?a:c:d:e:hlmr:t:")) != EOF) {
 		char *e;
 
 		switch (ch) {
 		case 'a':
-			audioout = strdup(optarg);
+			oa.audioout = strdup(optarg);
 			break;
 		case 'c':
 			errno = 0;
-			cols = strtol(optarg, &e, 10);
-			if (e == optarg || errno != 0 || cols > 1000) {
-				fprintf(stderr, "castty: Invalid column count: %ld\n",
-				    cols);
+			oa.cols = strtol(optarg, &e, 10);
+			if (e == optarg || errno != 0 || oa.cols > 1000) {
+				fprintf(stderr, "castty: Invalid column count: %d\n",
+				    oa.cols);
 				exit(EXIT_FAILURE);
 			}
 			break;
 		case 'd':
-			devid = strdup(optarg);
+			oa.devid = strdup(optarg);
 			break;
 		case 'e':
 			exec_cmd = strdup(optarg);
+			oa.cmd = escape(exec_cmd);
 			break;
 		case 'l':
 			audio_list();
@@ -116,18 +215,20 @@ main(int argc, char **argv)
 			break;
 		case 'r':
 			errno = 0;
-			rows = strtol(optarg, &e, 10);
-			if (e == optarg || errno != 0 || rows > 1000) {
-				fprintf(stderr, "castty: Invalid row count: %ld\n",
-				    rows);
+			oa.rows = strtol(optarg, &e, 10);
+			if (e == optarg || errno != 0 || oa.rows > 1000) {
+				fprintf(stderr, "castty: Invalid row count: %d\n",
+				    oa.rows);
 				exit(EXIT_FAILURE);
 			}
 			break;
-
+		case 't':
+			oa.title = escape(optarg);
+			break;
 		case 'h':
 		case '?':
 		default:
-			fprintf(stderr, "usage: castty [-adlcre] [out.js]\n"
+			fprintf(stderr, "usage: castty [-acdelrt] [out.json]\n"
 			    " -a <outfile>   Output audio to <outfile>. Must be specified with -d.\n"
 			    " -c <cols>      Use <cols> columns in the recorded shell session.\n"
 			    " -d <device>    Use audio device <device> for input.\n"
@@ -135,15 +236,16 @@ main(int argc, char **argv)
 			    " -l             List available audio input devices and exit.\n"
 			    " -m             Encode audio to mp3 before writing.\n"
 			    " -r <rows>      Use <rows> rows in the recorded shell session.\n"
+			    " -t <title>     Title of the cast.\n"
 			    "\n"
-			    " [out.js]       Optional output filename of recorded events. If not specified,\n"
-			    "                a file \"events.js\" will be created.\n");
+			    " [out.json]     Optional output filename of recorded events. If not specified,\n"
+			    "                a file \"events.json\" will be created.\n");
 			exit(EXIT_SUCCESS);
 		}
 	}
 
-	if ((audioout == NULL && devid != NULL) ||
-	    (devid == NULL && audioout != NULL)) {
+	if ((oa.audioout == NULL && oa.devid != NULL) ||
+	    (oa.devid == NULL && oa.audioout != NULL)) {
 		fprintf(stderr, "If -d or -a are specified, both must appear.\n");
 		exit(EXIT_FAILURE);
 	}
@@ -152,22 +254,23 @@ main(int argc, char **argv)
 	argv += optind;
 
 	if (argc > 0) {
-		outfile = argv[0];
+		oa.outfn = argv[0];
 	} else {
-		outfile = "events.js";
+		oa.outfn = "events.json";
 	}
 
 	if (pipe(controlfd) != 0) {
 		perror("pipe");
 		exit(EXIT_FAILURE);
 	}
+	oa.controlfd = controlfd[0];
 
 	if (tcgetattr(STDIN_FILENO, &tt) == -1) {
 		perror("tcgetattr");
 		exit(EXIT_FAILURE);
 	}
 
-	masterfd = posix_openpt(O_RDWR | O_NOCTTY);
+	oa.masterfd = masterfd = posix_openpt(O_RDWR | O_NOCTTY);
 	if (masterfd == -1) {
 		perror("posix_openpt");
 		exit(EXIT_FAILURE);
@@ -180,16 +283,16 @@ main(int argc, char **argv)
 
 	rwin = owin = win;
 
-	if (!rows || rows > win.ws_row) {
-		rows = win.ws_row;
+	if (!oa.rows || oa.rows > win.ws_row) {
+		oa.rows = win.ws_row;
 	}
 
-	if (!cols || cols > win.ws_col) {
-		cols = win.ws_col;
+	if (!oa.cols || oa.cols > win.ws_col) {
+		oa.cols = win.ws_col;
 	}
 
-	win.ws_row = rows;
-	win.ws_col = cols;
+	win.ws_row = oa.rows;
+	win.ws_col = oa.cols;
 
 	set_raw_input();
 
@@ -215,8 +318,7 @@ main(int argc, char **argv)
 		if (subchild) {
 			/* Handle output to file in parent */
 			xclose(controlfd[1]);
-			outputproc(masterfd, controlfd[0], outfile, audioout,
-			    devid, 0, win.ws_row, win.ws_col);
+			outputproc(&oa);
 		} else {
 			char *shell = getenv("SHELL");
 			if (shell == NULL) {

@@ -2,15 +2,18 @@
 
 #include <assert.h>
 #include <ctype.h>
+#include <inttypes.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
+#include <errno.h>
 #include <fcntl.h>
 #include <poll.h>
 #include <unistd.h>
 
 #include "castty.h"
+#include "utf8.h"
 
 static struct timeval prevtv, nowtv;
 static int paused, audio_enabled;
@@ -21,7 +24,7 @@ static int master;
 static void
 handle_command(enum control_command cmd)
 {
-	static char c_a = 0x01;
+	static unsigned char c_a = 0x01;
 
 	switch (cmd) {
 	case CMD_CTRL_A:
@@ -61,9 +64,10 @@ handle_command(enum control_command cmd)
 }
 
 static void
-handle_input(char *buf, size_t buflen)
+handle_input(unsigned char *buf, size_t buflen)
 {
 	static int first = 1;
+	double delta;
 
 	xwrite(STDOUT_FILENO, buf, buflen);
 
@@ -86,7 +90,7 @@ handle_input(char *buf, size_t buflen)
 	}
 
 	if (audio_enabled) {
-		dur += anow - aprev;
+		delta = anow - aprev;
 		aprev = anow;
 	} else {
 		double pms, nms;
@@ -94,58 +98,77 @@ handle_input(char *buf, size_t buflen)
 		pms = (double)(prevtv.tv_sec * 1000) + ((double)prevtv.tv_usec / 1000.);
 		nms = (double)(nowtv.tv_sec * 1000) + ((double)nowtv.tv_usec / 1000.);
 
-		dur += nms - pms;
+		delta = nms - pms;
 		prevtv = nowtv;
 	}
 
-	fprintf(evout, "\"s\":%0.3f,\"e\":\"", dur);
+	dur += delta;
 
+	fprintf(evout, ",[%0.4f,\"", delta / 1000);
+
+	uint32_t state, cp;
+	state = 0;
 	for (size_t j = 0; j < buflen; j++) {
-		switch (buf[j]) {
-			case '"':
-			case '\\':
-			case '%':
-			      fprintf(evout, "%%%02hhx", buf[j]);
-			      break;
-			default:
-				if (!isprint(buf[j])) {
-					fprintf(evout, "%%%02hhx", buf[j]);
-				} else {
+		if (!u8_decode(&state, &cp, buf[j])) {
+			if ((cp < 128 && !isprint(cp)) ||
+			    cp > 128) {
+				fprintf(evout, "\\u%04" PRIx32, cp);
+			} else {
+				switch (buf[j]) {
+				case '"':
+				case '\\':
+					fputc('\\', evout);
+				default:
 					fputc(buf[j], evout);
+					break;
 				}
-				break;
+			}
 		}
 	}
 
-	fputs("\"},{", evout);
+	fputs("\"]", evout);
 }
 
 void
-outputproc(int masterfd, int controlfd, const char *outfn, const char *audioout,
-    const char *devid, int append, int rows, int cols)
+outputproc(struct outargs *oa)
 {
+	unsigned char obuf[BUFSIZ];
 	struct pollfd pollfds[2];
-	char obuf[BUFSIZ];
 	int status;
 
 	status = EXIT_SUCCESS;
-	master = masterfd;
+	master = oa->masterfd;
 
-	if (audioout || devid) {
-		assert(audioout && devid);
+	if (oa->audioout || oa->devid) {
+		assert(oa->audioout && oa->devid);
 	}
 
-	if (audioout) {
+	if (oa->audioout) {
 		audio_enabled = 1;
-		audio_init(devid, audioout);
+		audio_init(oa->devid, oa->audioout);
 	}
 
-	evout = fopen(outfn, append ? "ab" : "wb");
-	if (evout == NULL) {
-		perror("fopen");
-		status = EXIT_FAILURE;
-		goto end;
-	}
+	evout = xfopen(oa->outfn, "wb");
+
+	/* Write asciicast v1 header and append events. Format defined at
+	 * https://github.com/asciinema/asciinema/blob/master/doc/asciicast-v1.md
+	 *
+	 * We insert an empty first record to avoid the hassle of dealing with
+	 * ES (still) not supporting trailing commas.
+	 */
+	fprintf(evout,
+	    "{\n"
+	    " \"version\": 1,\n"
+	    " \"width\": %d,\n"
+	    " \"height\": %d,\n"
+	    " \"command\": \"%s\",\n"
+	    " \"title\": \"%s\",\n"
+	    " \"env\": %s,\n"
+	    " \"stdout\":[[0,\"\"]",
+	    oa->cols, oa->rows,
+	    oa->cmd ? oa->cmd : "",
+	    oa->title ? oa->title : "",
+	    oa->env);
 
 	setbuf(evout, NULL);
 	setbuf(stdout, NULL);
@@ -158,21 +181,18 @@ outputproc(int masterfd, int controlfd, const char *outfn, const char *audioout,
 	/* Move cursor to top-left */
 	printf("\x1b[H");
 
-	fprintf(evout, "var _ti={\"rows\":%d,\"cols\":%d};\n", rows, cols);
-	fputs("var _tre=[{", evout);
+	int f = fcntl(oa->masterfd, F_GETFL);
+	fcntl(oa->masterfd, F_SETFL, f | O_NONBLOCK);
 
-	int f = fcntl(masterfd, F_GETFL);
-	fcntl(masterfd, F_SETFL, f | O_NONBLOCK);
-
-	f = fcntl(controlfd, F_GETFL);
-	fcntl(controlfd, F_SETFL, f | O_NONBLOCK);
+	f = fcntl(oa->controlfd, F_GETFL);
+	fcntl(oa->controlfd, F_SETFL, f | O_NONBLOCK);
 
 	/* Control descriptor is highest priority */
-	pollfds[0].fd = controlfd;
+	pollfds[0].fd = oa->controlfd;
 	pollfds[0].events = POLLIN;
 	pollfds[0].revents = 0;
 
-	pollfds[1].fd = masterfd;
+	pollfds[1].fd = oa->masterfd;
 	pollfds[1].events = POLLIN;
 	pollfds[1].revents = 0;
 
@@ -180,7 +200,9 @@ outputproc(int masterfd, int controlfd, const char *outfn, const char *audioout,
 		int nready;
 
 		nready = poll(pollfds, 2, -1);
-		if (nready == -1) {
+		if (nready == -1 && errno == EINTR) {
+			continue;
+		} else if (nready == -1) {
 			perror("poll");
 			status = EXIT_FAILURE;
 			goto end;
@@ -196,11 +218,11 @@ outputproc(int masterfd, int controlfd, const char *outfn, const char *audioout,
 				continue;
 			}
 
-			if (pollfds[i].fd == controlfd) {
+			if (pollfds[i].fd == oa->controlfd) {
 				enum control_command cmd;
 				ssize_t nread;
 
-				nread = read(controlfd, &cmd, sizeof cmd);
+				nread = read(oa->controlfd, &cmd, sizeof cmd);
 				if (nread == -1 || nread != sizeof cmd) {
 					perror("read");
 					status = EXIT_FAILURE;
@@ -208,10 +230,10 @@ outputproc(int masterfd, int controlfd, const char *outfn, const char *audioout,
 				}
 
 				handle_command(cmd);
-			} else if (pollfds[i].fd == masterfd) {
+			} else if (pollfds[i].fd == oa->masterfd) {
 				ssize_t nread;
 
-				nread = read(masterfd, obuf, BUFSIZ);
+				nread = read(oa->masterfd, obuf, BUFSIZ);
 				if (nread <= 0) {
 					status = EXIT_FAILURE;
 					goto end;
@@ -225,16 +247,17 @@ outputproc(int masterfd, int controlfd, const char *outfn, const char *audioout,
 	}
 
 end:
-	if (audioout && devid) {
+	fprintf(evout, "],\n \"duration\":%0.3f}", dur);
+
+	fflush(evout);
+
+	if (oa->audioout && oa->devid) {
 		audio_stop();
 		audio_exit();
 	}
 
-	/* Empty last record */
-	fprintf(evout, "\"s\":%0.3f,\"e\":\"\"}];", dur);
-
 	xfclose(evout);
-	xclose(masterfd);
+	xclose(oa->masterfd);
 
 	exit(status);
 }

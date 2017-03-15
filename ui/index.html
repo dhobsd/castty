@@ -29,12 +29,19 @@
 		</style>
 		<script src="js/min.js"></script>
 		<script src="js/player.js"></script>
-		<script src="events.js"></script>
 	</head>
 	<body>
 		<div id="container"></div>
 		<script>
-			var p = player("audio.mp3", $("#container"), _tre, _ti);
+			$.ajaxSetup({"error":function(XMLHttpRequest,textStatus, errorThrown) {   
+				console.log(textStatus);
+				console.log(errorThrown);
+				console.log(XMLHttpRequest.responseText);
+			}});
+
+			$.getJSON('events.json', {}, function (data) {
+				var p = player("audio2.mp3", $("#container"), data);
+			});
 		</script>
 	</body>
 </html>

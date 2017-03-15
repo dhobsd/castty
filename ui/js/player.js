@@ -22,10 +22,10 @@ var getTimeout = (function() {
 	}
 })();
 
-var player = function(audioFile, containerElem, termEvents, termInfo) {
+var player = function(audioFile, containerElem, events) {
 	var Player = {};
 	
-	var init = function(audioFile, containerElem, termEvents, termInfo) {
+	var init = function(audioFile, containerElem, events) {
 		Player.container = containerElem;
 
 		Player.termContainer = $('<div id="term"></div>')
@@ -35,11 +35,12 @@ var player = function(audioFile, containerElem, termEvents, termInfo) {
 		    .appendTo(Player.container);
 
 		Player.term = new Terminal({
-			rows: termInfo.rows,
-			cols: termInfo.cols
+			rows: events.height,
+			cols: events.width
 		});
 		Player.term.open(Player.termContainer[0]);
-		Player.termWidth = $(Player.termContainer).textWidth('m'.repeat(termInfo.cols),
+		Player.termWidth =
+		    $(Player.termContainer).textWidth('m'.repeat(events.width),
 		    'courier-new,courier,monospace') + 'px';
 
 		Player.termContainer.css({
@@ -52,7 +53,7 @@ var player = function(audioFile, containerElem, termEvents, termInfo) {
 		    width: Player.termWidth
 		});
 
-		Player.termEvents = termEvents;
+		Player.termEvents = events.stdout;
 		Player.eventOff = 0;
 		Player.rem = 0;
 		Player.timerHandle = undefined;
@@ -60,18 +61,21 @@ var player = function(audioFile, containerElem, termEvents, termInfo) {
 		Player.playTime = 0;
 
 		Player.seekTo = function(t) {
-			var back = Player.eventOff && t < Player.termEvents[Player.eventOff - 1].s;
+			var back = Player.eventOff &&
+			    Player.termEvents[Player.eventOff - 1][0] > (t / 1000);
 
 			if (back) {
 				Player.term.clear();
 				Player.term.reset();
+				Player.pos = 0;
 			}
 
 			var i = back ? 0 : Player.eventOff;
 			var str = "";
 			while (i < Player.termEvents.length &&
-			    Player.termEvents[i].s <= t) {
-				str += decodeURIComponent(Player.termEvents[i++].e);
+			    Player.pos + Player.termEvents[i][0] <= (t / 1000)) {
+				str += Player.termEvents[i][1];
+				Player.pos += Player.termEvents[i++][0];
 			}
 
 			i = i == Player.termEvents.length ? i - 1 : i;
@@ -79,14 +83,20 @@ var player = function(audioFile, containerElem, termEvents, termInfo) {
 			Player.term.write(str);
 			Player.eventOff = i;
 
-			return Player.termEvents[i].s - t;
+			return Player.termEvents[i][0] - t;
 		};
+
+		Player.behind = function() {
+			return Player.pos + Player.termEvents[Player.eventOff][0] <
+			    Player.audio.currentTime;
+		}
 
 		Player.nextEvent = function() {
 			var str = "";
 			while (Player.eventOff < Player.termEvents.length &&
-			    Player.termEvents[Player.eventOff].s < Player.audio.currentTime * 1000) {
-				str += decodeURIComponent(Player.termEvents[Player.eventOff].e);
+			    Player.behind()) {
+				str += Player.termEvents[Player.eventOff][1];
+				Player.pos += Player.termEvents[Player.eventOff][0];
 				Player.eventOff++;
 			}
 
@@ -95,8 +105,8 @@ var player = function(audioFile, containerElem, termEvents, termInfo) {
 			if (Player.eventOff < Player.termEvents.length &&
 			    Player.termEvents[Player.eventOff]) {
 				Player.timerHandle = setTimeout(Player.nextEvent,
-				    (Player.termEvents[Player.eventOff].s -
-				     Player.audio.currentTime * 1000));
+				    ((Player.pos + Player.termEvents[Player.eventOff][0]) -
+				     Player.audio.currentTime) * 1000);
 			}
 		}
 
@@ -114,6 +124,7 @@ var player = function(audioFile, containerElem, termEvents, termInfo) {
 
 		Player.paused = 1;
 		Player.ended = 0;
+		Player.pos = 0;
 		Player.toggle.click(function() {
 			if (Player.startable) {
 				if (Player.ended) {
@@ -152,7 +163,7 @@ var player = function(audioFile, containerElem, termEvents, termInfo) {
 			}
 		});
 
-		Player.duration = Player.termEvents[Player.termEvents.length - 1].s;
+		Player.duration = events.duration;
 		Player.seeker = $('<input type="range" min="0" max="' +
 		    Player.duration + '" step="' + Player.duration / 1000 +
 		    '" value="0">').appendTo(Player.controls);
@@ -230,5 +241,5 @@ var player = function(audioFile, containerElem, termEvents, termInfo) {
 		return Player;
 	}
 
-	return init(audioFile, containerElem, termEvents, termInfo);
+	return init(audioFile, containerElem, events);
 }
