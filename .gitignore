@@ -2,6 +2,7 @@
 .*.swp
 *.o
 *.d
+*.dSYM
 castty
 events.json
 audio.mp3
