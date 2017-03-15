@@ -85,7 +85,8 @@ Currently supported commands are:
  * `m`: Mute or unmute the recording. Recording will continue, but without any
    audio until unmuted.
  * `p`: Pause or unpause the recording. Neither terminal nor audio will be
-   recorded during the paused period.
+   recorded during the paused period. When unpausing, CasTTY requests the
+   screen to be redrawn. This may cause your terminal buffer to clear.
 
 ### Miscellaneous
 
