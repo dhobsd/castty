@@ -12,6 +12,10 @@ CFLAGS = -O2 -std=c11 -MMD -MP $(WARNINGS)
 LDFLAGS = -L/usr/local/lib
 LDLIBS = -lsoundio -lpthread -lmp3lame
 
+ifeq ($(DEBUG),1)
+	CFLAGS += -O0 -g3
+endif
+
 TARGET := castty
 OBJ := audio.o castty.o input.o output.o shell.o xwrap.o
 

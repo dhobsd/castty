@@ -9,6 +9,7 @@
 #include <stdlib.h>
 
 #include <errno.h>
+#include <execinfo.h>
 #include <fcntl.h>
 #include <signal.h>
 #include <termios.h>
@@ -22,6 +23,25 @@ static struct winsize owin, rwin, win;
 static pid_t child, subchild;
 static struct termios tt;
 static int masterfd;
+
+static void
+do_backtrace(int sig)
+{
+	void *callstack[128];
+	char **strs;
+	int frames;
+
+	frames = backtrace(callstack, 128);
+	strs = backtrace_symbols(callstack, frames);
+
+	for (int i = 0; i < frames; ++i) {
+		fprintf(stderr, "\n\r%s", strs[i]);
+	}
+
+	fprintf(stderr, "\n\r");
+	free(strs);
+	exit(EXIT_FAILURE);
+}
 
 static void
 handle_sigchld(int sig)
@@ -301,6 +321,8 @@ main(int argc, char **argv)
 	set_raw_input();
 
 	signal(SIGCHLD, handle_sigchld);
+	signal(SIGSEGV, do_backtrace);
+	signal(SIGBUS, do_backtrace);
 
 	child = fork();
 	if (child < 0) {
