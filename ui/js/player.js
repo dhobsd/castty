@@ -62,7 +62,7 @@ var player = function(audioFile, containerElem, events) {
 
 		Player.seekTo = function(t) {
 			var back = Player.eventOff &&
-			    Player.termEvents[Player.eventOff - 1][0] > (t / 1000);
+			    Player.pos + Player.termEvents[Player.eventOff - 1][0] > (t / 1000);
 
 			if (back) {
 				Player.term.clear();
