@@ -513,24 +513,36 @@ audio_stop(void)
 		return;
 	}
 
-	soundio_flush_events(ctx.io);
-	usleep(100);
+	if (ctx.io) {
+		soundio_flush_events(ctx.io);
+		usleep(100);
+	}
 
 	post = 2;
 
 	pthread_join(wthread, NULL);
 	pthread_join(rthread, NULL);
 
-	soundio_instream_destroy(ctx.stream);
-	soundio_device_unref(ctx.dev);
-	soundio_destroy(ctx.io);
+	if (ctx.stream) {
+		soundio_instream_destroy(ctx.stream);
+	}
+
+	if (ctx.dev) {
+		soundio_device_unref(ctx.dev);
+	}
+
+	if (ctx.io) {
+		soundio_destroy(ctx.io);
+	}
 }
 
 void
 audio_exit(void)
 {
 
-	xfclose(ctx.fout);
+	if (ctx.fout) {
+		xfclose(ctx.fout);
+	}
 }
 
 void
