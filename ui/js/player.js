@@ -93,34 +93,55 @@ var player = function(audioFile, containerElem, events) {
 
 		Player.nextEvent = function() {
 			var str = "";
-			while (Player.eventOff < Player.termEvents.length &&
-			    Player.behind()) {
-				str += Player.termEvents[Player.eventOff][1];
-				Player.pos += Player.termEvents[Player.eventOff][0];
-				Player.eventOff++;
+			if (audioFile) {
+				while (Player.eventOff < Player.termEvents.length &&
+				Player.behind()) {
+					str += Player.termEvents[Player.eventOff][1];
+					Player.pos += Player.termEvents[Player.eventOff][0];
+					Player.eventOff++;
+				}
+			} else {
+				str = Player.termEvents[Player.eventOff][1];
+				Player.pos += Player.termEvents[Player.eventOff++][0];
 			}
 
 			Player.term.write(str);
 
-			if (Player.eventOff < Player.termEvents.length &&
-			    Player.termEvents[Player.eventOff]) {
-				Player.timerHandle = setTimeout(Player.nextEvent,
-				    ((Player.pos + Player.termEvents[Player.eventOff][0]) -
-				     Player.audio.currentTime) * 1000);
+			if (Player.eventOff < Player.termEvents.length) {
+				if (audioFile) {
+					Player.timerHandle = setTimeout(Player.nextEvent,
+					    ((Player.pos + Player.termEvents[Player.eventOff][0]) -
+					    Player.audio.currentTime) * 1000);
+				} else {
+					Player.timerHandle = setTimeout(Player.nextEvent,
+					    Player.termEvents[Player.eventOff][0] * 1000);
+				}
 			}
 		}
 
+		Player.seekPos = 0;
 		Player.updateSeeker = function() {
 			Player.seekUpdate = 1;
-			Player.seeker.val(100 + Player.audio.currentTime * 1000 +
-			    ((Player.audio.currentTime * 1000) % 100)).change();
+			if (audioFile) {
+				Player.seeker.val(100 + Player.audio.currentTime * 1000 +
+				    ((Player.audio.currentTime * 1000) % 100)).change();
+			} else {
+				Player.seekPos += 100;
+				Player.seeker.val(Player.seekPos).change();
+			}
 			Player.seekUpdate = 0;
 
 			Player.seekerHandle = setTimeout(Player.updateSeeker, 100);
 		}
 
-		Player.toggle = $('<button id="playToggle" disabled>(Loading)</button>')
-			.appendTo(Player.controls);
+		if (audioFile) {
+			Player.toggle = $('<button id="playToggle" disabled>(Loading)</button>')
+			    .appendTo(Player.controls);
+		} else {
+			Player.toggle = $('<button id="playToggle"><i class="material-icons">play_arrow</i></button>')
+			    .appendTo(Player.controls);
+			Player.startable = 1;
+		}
 
 		Player.paused = 1;
 		Player.ended = 0;
@@ -141,13 +162,20 @@ var player = function(audioFile, containerElem, events) {
 					Player.paused = 0;
 					Player.toggle.html('<i class="material-icons">pause</i>');
 					Player.start = Date.now();
-					Player.audio.play();
+
+					if (audioFile) {
+						Player.audio.play();
+					}
+
 					Player.timerHandle =
 					    setTimeout(Player.nextEvent, Player.rem);
 					Player.seekerHandle =
 					    setTimeout(Player.updateSeeker, 100);
 				} else {
-					Player.audio.pause();
+					if (audioFile) {
+						Player.audio.pause();
+					}
+
 					if (Player.seekerHandle) {
 						clearTimeout(Player.seekerHandle);
 					}
@@ -201,42 +229,48 @@ var player = function(audioFile, containerElem, events) {
 
 				clearTimeout(Player.timerHandle);
 				Player.rem = Player.seekTo(val);
-				Player.audio.currentTime = val / 1000;
+				if (audioFile) {
+					Player.audio.currentTime = val / 1000;
+				} else {
+					Player.seekPos = val;
+				}
 				Player.seeking = 0;
 			}
 		});
 
-		Player.audio = new Audio(audioFile);
-		$(Player.audio).on('ended', function () {
-			Player.seekUpdate = 1;
-			Player.seeker.val(Player.duration).change();
-			Player.seekUpdate = 0;
+		if (audioFile) {
+			Player.audio = new Audio(audioFile);
+			$(Player.audio).on('ended', function () {
+				Player.seekUpdate = 1;
+				Player.seeker.val(Player.duration).change();
+				Player.seekUpdate = 0;
 
-			Player.ended = 1;
-			Player.paused = 1;
-			Player.rem = 0;
-			Player.eventOff = 0;
-			Player.toggle.html('<i class="material-icons">replay</i>');
+				Player.ended = 1;
+				Player.paused = 1;
+				Player.rem = 0;
+				Player.eventOff = 0;
+				Player.toggle.html('<i class="material-icons">replay</i>');
 
-			clearTimeout(Player.timerHandle);
-			clearTimeout(Player.seekerHandle);
-			Player.timerHandle = undefined;
-			Player.seekerHandle = undefined;
-		});
+				clearTimeout(Player.timerHandle);
+				clearTimeout(Player.seekerHandle);
+				Player.timerHandle = undefined;
+				Player.seekerHandle = undefined;
+			});
 
-		$(Player.audio).on('durationchange', function() {
-			Player.maxSeek = Player.audio.duration * 1000;
-		});
+			$(Player.audio).on('durationchange', function() {
+				Player.maxSeek = Player.audio.duration * 1000;
+			});
 
-		$(Player.audio).on('canplaythrough', function() {
-			Player.startable = 1;
-			if (!Player.restarted) {
-				Player.toggle.html('<i class="material-icons">play_arrow</i>');
-			} else {
-				Player.restarted = 0;
-			}
-			Player.toggle.prop('disabled', false);
-		});
+			$(Player.audio).on('canplaythrough', function() {
+				Player.startable = 1;
+				if (!Player.restarted) {
+					Player.toggle.html('<i class="material-icons">play_arrow</i>');
+				} else {
+					Player.restarted = 0;
+				}
+				Player.toggle.prop('disabled', false);
+			});
+		}
 
 		return Player;
 	}
