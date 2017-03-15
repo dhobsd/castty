@@ -263,7 +263,10 @@ end:
 	fflush(evout);
 
 	if (oa->audioout && oa->devid) {
-		audio_stop();
+		if (!paused) {
+			audio_stop();
+		}
+
 		audio_exit();
 	}
 
