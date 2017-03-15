@@ -241,5 +241,18 @@ var player = function(audioFile, containerElem, events) {
 		return Player;
 	}
 
+	$(document).mouseup(function() {
+		var sel = undefined;
+		if (document.selection && document.selection.type != "Control") {
+			sel = document.selection.createRange().text;
+		} else if (window.getSelection) {
+			sel = window.getSelection().toString();
+		}
+
+		if (sel && document.execCommand) {
+			document.execCommand('copy');
+		}
+	});
+
 	return init(audioFile, containerElem, events);
 }
