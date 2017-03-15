@@ -16,8 +16,9 @@ enum control_command {
 };
 
 struct outargs {
-	int masterfd;
+	int start_paused;
 	int controlfd;
+	int masterfd;
 	int rows;
 	int cols;
 

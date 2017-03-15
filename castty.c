@@ -183,7 +183,7 @@ main(int argc, char **argv)
 	oa.env = serialize_env();
 	exec_cmd = NULL;
 
-	while ((ch = getopt(argc, argv, "?a:c:d:e:hlmr:t:")) != EOF) {
+	while ((ch = getopt(argc, argv, "?a:c:d:e:hlmpr:t:")) != EOF) {
 		char *e;
 
 		switch (ch) {
@@ -213,6 +213,9 @@ main(int argc, char **argv)
 		case 'm':
 			audio_toggle_mp3();
 			break;
+		case 'p':
+			oa.start_paused = 1;
+			break;
 		case 'r':
 			errno = 0;
 			oa.rows = strtol(optarg, &e, 10);
@@ -235,6 +238,7 @@ main(int argc, char **argv)
 			    " -e <cmd>       Execute <cmd> from the recorded shell session.\n"
 			    " -l             List available audio input devices and exit.\n"
 			    " -m             Encode audio to mp3 before writing.\n"
+			    " -p             Begin the recording in paused mode.\n"
 			    " -r <rows>      Use <rows> rows in the recorded shell session.\n"
 			    " -t <title>     Title of the cast.\n"
 			    "\n"

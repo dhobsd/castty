@@ -15,8 +15,8 @@
 #include "castty.h"
 #include "utf8.h"
 
+static int audio_enabled, paused, start_paused;
 static struct timeval prevtv, nowtv;
-static int paused, audio_enabled;
 static double aprev, anow, dur;
 static FILE *evout;
 static int master;
@@ -45,14 +45,16 @@ handle_command(enum control_command cmd)
 		paused = !paused;
 		if (!paused) {
 			if (audio_enabled) {
-				anow = aprev = audio_clock_ms();
+				fprintf(stderr, "\r\nXXXXXX start\r\n");
 				audio_start();
+				anow = aprev = audio_clock_ms();
 			} else {
 				gettimeofday(&prevtv, NULL);
 				nowtv = prevtv;
 			}
 		} else {
 			if (audio_enabled) {
+				fprintf(stderr, "\r\nXXXXXX stop\r\n");
 				audio_stop();
 			}
 		}
@@ -69,11 +71,11 @@ handle_input(unsigned char *buf, size_t buflen)
 	static int first = 1;
 	double delta;
 
-	xwrite(STDOUT_FILENO, buf, buflen);
-
 	if (first) {
 		if (audio_enabled) {
-			audio_start();
+			if (!start_paused) {
+				audio_start();
+			}
 			anow = aprev = audio_clock_ms();
 		} else {
 			gettimeofday(&prevtv, NULL);
@@ -151,6 +153,8 @@ outputproc(struct outargs *oa)
 		audio_enabled = 1;
 		audio_init(oa->devid, oa->audioout);
 	}
+
+	start_paused = paused = oa->start_paused;
 
 	evout = xfopen(oa->outfn, "wb");
 
@@ -242,6 +246,8 @@ outputproc(struct outargs *oa)
 					status = EXIT_FAILURE;
 					goto end;
 				}
+
+				xwrite(STDOUT_FILENO, obuf, nread);
 
 				if (!paused) {
 					handle_input(obuf, nread);
