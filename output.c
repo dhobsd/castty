@@ -45,7 +45,6 @@ handle_command(enum control_command cmd)
 		paused = !paused;
 		if (!paused) {
 			if (audio_enabled) {
-				fprintf(stderr, "\r\nXXXXXX start\r\n");
 				audio_start();
 				anow = aprev = audio_clock_ms();
 			} else {
@@ -54,7 +53,6 @@ handle_command(enum control_command cmd)
 			}
 		} else {
 			if (audio_enabled) {
-				fprintf(stderr, "\r\nXXXXXX stop\r\n");
 				audio_stop();
 			}
 		}
