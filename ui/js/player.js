@@ -95,7 +95,7 @@ var player = function(audioFile, containerElem, events) {
 			var str = "";
 			if (audioFile) {
 				while (Player.eventOff < Player.termEvents.length &&
-				Player.behind()) {
+				    Player.behind()) {
 					str += Player.termEvents[Player.eventOff][1];
 					Player.pos += Player.termEvents[Player.eventOff][0];
 					Player.eventOff++;
