@@ -25,6 +25,7 @@ static void
 handle_command(enum control_command cmd)
 {
 	static unsigned char c_a = 0x01;
+	static unsigned char c_l = 0x0c;
 
 	switch (cmd) {
 	case CMD_CTRL_A:
@@ -44,6 +45,8 @@ handle_command(enum control_command cmd)
 	case CMD_PAUSE:
 		paused = !paused;
 		if (!paused) {
+			/* Redraw screen */
+			xwrite(master, &c_l, 1);
 			if (audio_enabled) {
 				audio_start();
 				anow = aprev = audio_clock_ms();
