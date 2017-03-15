@@ -4,6 +4,7 @@
 #include <string.h>
 
 #include <pthread.h>
+#include <signal.h>
 #include <unistd.h>
 
 #include <lame/lame.h>
@@ -74,6 +75,16 @@ writer(void *priv)
 	lame_t lame = NULL;
 
 	(void)priv;
+
+	stack_t ss;
+	memset(&ss, 0, sizeof(ss));
+	ss.ss_size = 4 * SIGSTKSZ;
+	ss.ss_sp = calloc(1, ss.ss_size);
+	if (ss.ss_sp == NULL) {
+		perror("calloc");
+		exit(EXIT_FAILURE);
+	}
+	sigaltstack(&ss, 0);
 
 	__sync_fetch_and_sub(&post, 1);
 	while (post > 0 || recording == 0) {
@@ -280,6 +291,16 @@ reader(void *priv)
 {
 
 	(void)priv;
+
+	stack_t ss;
+	memset(&ss, 0, sizeof(ss));
+	ss.ss_size = 4 * SIGSTKSZ;
+	ss.ss_sp = calloc(1, ss.ss_size);
+	if (ss.ss_sp == NULL) {
+		perror("calloc");
+		exit(EXIT_FAILURE);
+	}
+	sigaltstack(&ss, 0);
 
 	__sync_fetch_and_sub(&post, 1);
 	while (post > 0 || recording == 0) {

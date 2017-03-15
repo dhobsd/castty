@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 
+#include <signal.h>
 #include <termios.h>
 #include <unistd.h>
 
@@ -52,6 +53,16 @@ xfopen(const char *f, const char *m)
 	}
 
 	return r;
+}
+
+void
+xsigaction(int signum, const struct sigaction *act, struct sigaction *oldact)
+{
+
+	if (sigaction(signum, act, oldact) == -1) {
+		perror("sigaction");
+		exit(EXIT_FAILURE);
+	}
 }
 
 void

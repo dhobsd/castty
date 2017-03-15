@@ -25,21 +25,30 @@ static struct termios tt;
 static int masterfd;
 
 static void
-do_backtrace(int sig)
+do_backtrace(int sig, siginfo_t *siginfo, void *context)
 {
 	void *callstack[128];
 	char **strs;
 	int frames;
 
+	(void)context;
+
 	frames = backtrace(callstack, 128);
 	strs = backtrace_symbols(callstack, frames);
 
+	fprintf(stderr, "\r\nProcess %d got signal %d\r\n"
+	    "\tat faultaddr: %p errno: %d code: %d\r\n",
+	    siginfo->si_pid, sig, siginfo->si_addr, siginfo->si_errno,
+	    siginfo->si_code);
+
+	fprintf(stderr, "Backtrace:\r\n");
 	for (int i = 0; i < frames; ++i) {
 		fprintf(stderr, "\n\r%s", strs[i]);
 	}
 
-	fprintf(stderr, "\n\r");
+	fprintf(stderr, "\r\n");
 	free(strs);
+
 	exit(EXIT_FAILURE);
 }
 
@@ -190,6 +199,46 @@ serialize_env(void)
 	return p;
 }
 
+static void
+setup_sighandlers(void)
+{
+
+	stack_t ss;
+	memset(&ss, 0, sizeof(ss));
+	ss.ss_size = 4 * SIGSTKSZ;
+	ss.ss_sp = calloc(1, ss.ss_size);
+	if (ss.ss_sp == NULL) {
+		perror("calloc");
+		exit(EXIT_FAILURE);
+	}
+	sigaltstack(&ss, 0);
+
+	struct sigaction chld;
+	chld.sa_flags = 0;
+	chld.sa_mask = 0;
+	chld.sa_handler = handle_sigchld;
+	xsigaction(SIGCHLD, &chld, NULL);
+
+	struct sigaction crash;
+	crash.sa_flags = 0;
+	crash.sa_mask = 0;
+	crash.sa_sigaction = do_backtrace;
+	xsigaction(SIGSEGV, &crash, NULL);
+	xsigaction(SIGBUS, &crash, NULL);
+	xsigaction(SIGFPE, &crash, NULL);
+	xsigaction(SIGILL, &crash, NULL);
+	xsigaction(SIGTRAP, &crash, NULL);
+	xsigaction(SIGABRT, &crash, NULL);
+	xsigaction(SIGPIPE, &crash, NULL);
+	xsigaction(SIGSYS, &crash, NULL);
+
+	struct sigaction winch;
+	winch.sa_flags = 0;
+	winch.sa_mask = 0;
+	winch.sa_handler = handle_sigwinch;
+	xsigaction(SIGWINCH, &winch, NULL);
+}
+
 int
 main(int argc, char **argv)
 {
@@ -198,6 +247,8 @@ main(int argc, char **argv)
 	extern int optind;
 	struct outargs oa;
 	char *exec_cmd;
+
+	setup_sighandlers();
 
 	memset(&oa, 0, sizeof oa);
 	oa.env = serialize_env();
@@ -320,10 +371,6 @@ main(int argc, char **argv)
 
 	set_raw_input();
 
-	signal(SIGCHLD, handle_sigchld);
-	signal(SIGSEGV, do_backtrace);
-	signal(SIGBUS, do_backtrace);
-
 	child = fork();
 	if (child < 0) {
 		perror("fork");
@@ -340,6 +387,8 @@ main(int argc, char **argv)
 
 			exit(EXIT_FAILURE);
 		}
+
+		signal(SIGWINCH, SIG_IGN);
 
 		if (subchild) {
 			/* Handle output to file in parent */
@@ -358,8 +407,6 @@ main(int argc, char **argv)
 			/* Run the shell in the child */
 			shellproc(shell, exec_cmd, &win, masterfd);
 		}
-	} else {
-		signal(SIGWINCH, handle_sigwinch);
 	}
 
 	xclose(controlfd[0]);
