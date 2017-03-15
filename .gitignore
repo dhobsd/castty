@@ -3,4 +3,5 @@
 *.o
 *.d
 castty
-events.js
+events.json
+audio.mp3

@@ -112,7 +112,11 @@ handle_input(unsigned char *buf, size_t buflen)
 		if (!u8_decode(&state, &cp, buf[j])) {
 			if ((cp < 128 && !isprint(cp)) ||
 			    cp > 128) {
-				fprintf(evout, "\\u%04" PRIx32, cp);
+				if (state == UTF8_ACCEPT) {
+					fprintf(evout, "\\u%04" PRIx32, cp);
+				} else {
+					fputs("\\u1f4a9", evout);
+				}
 			} else {
 				switch (buf[j]) {
 				case '"':
