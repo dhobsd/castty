@@ -221,7 +221,11 @@ serialize_env(void)
 		free(e);
 	}
 
-	p[o++] = '}';
+	if (p[o - 1] == ',') {
+		p[o - 1] = '}';
+	} else {
+		p[o] = '}';
+	}
 
 	return p;
 }
