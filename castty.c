@@ -142,6 +142,12 @@ escape(const char *from)
 static char *
 serialize_env(void)
 {
+	static const char *interesting[] = {
+		"TERM",
+		"SHELL",
+		"PS1",
+		"PS2",
+	};
 	size_t o = 0, s = 1024;
 	char *p;
 
@@ -155,6 +161,7 @@ serialize_env(void)
 
 	for (unsigned i = 0; environ[i] != NULL; i++) {
 		char *e, *k, *v;
+		int useful;
 		size_t l;
 
 		e = escape(environ[i]);
@@ -168,6 +175,18 @@ serialize_env(void)
 		}
 
 		*v = '\0';
+
+		useful = 0;
+		for (unsigned j = 0; j < sizeof interesting / sizeof interesting[0]; j++) {
+			if (strcmp(k, interesting[j]) == 0) {
+				useful = 1;
+			}
+		}
+
+		if (!useful) {
+			continue;
+		}
+
 		v++;
 
 		/* 7 is for two sets of quotes, a colon, a comma, and a 0 byte */
