@@ -12,10 +12,6 @@
 
 #include "castty.h"
 
-#ifndef MIN
-#define MIN(a, b) ((a < b) ? a : b)
-#endif
-
 static enum SoundIoFormat formats[] = {
 	SoundIoFormatFloat32LE,
 	SoundIoFormatFloat32BE,

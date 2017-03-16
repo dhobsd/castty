@@ -19,7 +19,7 @@
 
 extern char **environ;
 
-static struct winsize owin, rwin, win;
+static struct winsize rwin, win;
 static pid_t child, subchild;
 static struct termios tt;
 static FILE *debug_out;
@@ -100,7 +100,9 @@ handle_sigwinch(int sig)
 		exit(EXIT_FAILURE);
 	}
 
-	if (rwin.ws_col <= owin.ws_col || rwin.ws_row <= owin.ws_row) {
+	if (rwin.ws_col < win.ws_col || rwin.ws_row < win.ws_row) {
+		win.ws_row = MIN(win.ws_row, rwin.ws_row);
+		win.ws_col = MIN(win.ws_col, rwin.ws_col);
 		win = rwin;
 		if (ioctl(masterfd, TIOCSWINSZ, &win) == -1) {
 			perror("ioctl(TIOCSWINSZ)");
@@ -405,7 +407,7 @@ main(int argc, char **argv)
 		exit(EXIT_FAILURE);
 	}
 
-	rwin = owin = win;
+	rwin = win;
 
 	if (!oa.rows || oa.rows > win.ws_row) {
 		oa.rows = win.ws_row;

@@ -54,4 +54,8 @@ void xsigaction(int signum, const struct sigaction *act, struct sigaction *oldac
 void xtcsetattr(int, int, const struct termios *);
 size_t xwrite(int, void *, size_t);
 
+#ifndef MIN
+#define MIN(a, b) ((a < b) ? a : b)
+#endif
+
 #endif
