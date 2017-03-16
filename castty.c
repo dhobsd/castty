@@ -100,7 +100,7 @@ handle_sigwinch(int sig)
 		exit(EXIT_FAILURE);
 	}
 
-	if (rwin.ws_col <= owin.ws_col || rwin.ws_row < owin.ws_row) {
+	if (rwin.ws_col <= owin.ws_col || rwin.ws_row <= owin.ws_row) {
 		win = rwin;
 		if (ioctl(masterfd, TIOCSWINSZ, &win) == -1) {
 			perror("ioctl(TIOCSWINSZ)");
