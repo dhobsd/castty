@@ -262,13 +262,13 @@ setup_sighandlers(void)
 
 	struct sigaction chld;
 	chld.sa_flags = 0;
-	chld.sa_mask = 0;
+	(void)sigemptyset(&chld.sa_mask);
 	chld.sa_handler = handle_sigchld;
 	xsigaction(SIGCHLD, &chld, NULL);
 
 	struct sigaction crash;
 	crash.sa_flags = 0;
-	crash.sa_mask = 0;
+	(void)sigemptyset(&crash.sa_mask);
 	crash.sa_sigaction = do_backtrace;
 	xsigaction(SIGSEGV, &crash, NULL);
 	xsigaction(SIGBUS, &crash, NULL);
@@ -281,7 +281,7 @@ setup_sighandlers(void)
 
 	struct sigaction winch;
 	winch.sa_flags = 0;
-	winch.sa_mask = 0;
+	(void)sigemptyset(&winch.sa_mask);
 	winch.sa_handler = handle_sigwinch;
 	xsigaction(SIGWINCH, &winch, NULL);
 }
