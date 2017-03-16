@@ -22,6 +22,7 @@ extern char **environ;
 static struct winsize owin, rwin, win;
 static pid_t child, subchild;
 static struct termios tt;
+static FILE *debug_out;
 static int masterfd;
 
 static void
@@ -40,10 +41,23 @@ do_backtrace(int sig, siginfo_t *siginfo, void *context)
 	    "\tat faultaddr: %p errno: %d code: %d\r\n",
 	    siginfo->si_pid, sig, siginfo->si_addr, siginfo->si_errno,
 	    siginfo->si_code);
+	if (debug_out) {
+		fprintf(debug_out, "Process %d got signal %d\n"
+		    "\tat faultaddr: %p errno: %d code: %d\n",
+		    siginfo->si_pid, sig, siginfo->si_addr, siginfo->si_errno,
+		    siginfo->si_code);
+	}
 
 	fprintf(stderr, "Backtrace:\r\n");
+	if (debug_out) {
+		fprintf(debug_out, "Backtrace:\n");
+	}
+
 	for (int i = 0; i < frames; ++i) {
 		fprintf(stderr, "\n\r%s", strs[i]);
+		if (debug_out) {
+			fprintf(debug_out, "%s\n", strs[i]);
+		}
 	}
 
 	fprintf(stderr, "\r\n");
@@ -285,7 +299,7 @@ main(int argc, char **argv)
 	oa.env = serialize_env();
 	exec_cmd = NULL;
 
-	while ((ch = getopt(argc, argv, "?a:c:d:e:hlmpr:t:")) != EOF) {
+	while ((ch = getopt(argc, argv, "?a:c:D:d:e:hlmpr:t:")) != EOF) {
 		char *e;
 
 		switch (ch) {
@@ -300,6 +314,9 @@ main(int argc, char **argv)
 				    oa.cols);
 				exit(EXIT_FAILURE);
 			}
+			break;
+		case 'D':
+			debug_out = xfopen(optarg, "w");
 			break;
 		case 'd':
 			oa.devid = strdup(optarg);
@@ -336,6 +353,7 @@ main(int argc, char **argv)
 			fprintf(stderr, "usage: castty [-acdelrt] [out.json]\n"
 			    " -a <outfile>   Output audio to <outfile>. Must be specified with -d.\n"
 			    " -c <cols>      Use <cols> columns in the recorded shell session.\n"
+			    " -D <outfile>   Send debugging information into <outfile>.\n"
 			    " -d <device>    Use audio device <device> for input.\n"
 			    " -e <cmd>       Execute <cmd> from the recorded shell session.\n"
 			    " -l             List available audio input devices and exit.\n"

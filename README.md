@@ -41,6 +41,7 @@ installed to a location other than `/usr/local/`, you will have to edit the
     usage: castty [-acdelrt] [out.json]
      -a <outfile>   Output audio to <outfile>. Must be specified with -d.
      -c <cols>      Use <cols> columns in the recorded shell session.
+     -D <outfile>   Send debugging information into <outfile>
      -d <device>    Use audio device <device> for input.
      -e <cmd>       Execute <cmd> from the recorded shell session.
      -l             List available audio input devices and exit.
