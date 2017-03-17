@@ -39,8 +39,13 @@ var player = function(audioFile, containerElem, events) {
 			cols: events.width
 		});
 		Player.term.open(Player.termContainer[0]);
-		Player.termWidth =
-		    $(Player.termContainer).textWidth('m'.repeat(events.width),
+
+		/* Apparently some browsers don't have String.repeat */
+		var s = "";
+		for (i = 0; i < events.width; i++) {
+			s += "m";
+		}
+		Player.termWidth = $(Player.termContainer).textWidth(s,
 		    'courier-new,courier,monospace') + 'px';
 
 		Player.termContainer.css({
