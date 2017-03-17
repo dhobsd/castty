@@ -19,7 +19,7 @@ ifeq ($(DEBUG),1)
 endif
 
 TARGET := castty
-OBJ := audio.o castty.o input.o output.o shell.o xwrap.o
+OBJ := audio.o castty.o input.o output.o shell.o xwrap.o audio/writer-raw.o audio/writer-lame.o
 
 all: $(TARGET)
 $(TARGET): $(OBJ)

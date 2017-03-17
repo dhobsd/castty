@@ -7,10 +7,12 @@
 #include <signal.h>
 #include <unistd.h>
 
-#include <lame/lame.h>
 #include <soundio/soundio.h>
 
 #include "castty.h"
+#include "audio/writer.h"
+#include "audio/writer-lame.h"
+#include "audio/writer-raw.h"
 
 static enum SoundIoFormat formats[] = {
 	SoundIoFormatFloat32LE,
@@ -66,9 +68,7 @@ pthread_t wthread, rthread;
 static void *
 writer(void *priv)
 {
-	unsigned char *mp3buf = NULL;
-	size_t buf_size = 0;
-	lame_t lame = NULL;
+	struct audio_writer *aw;
 
 	(void)priv;
 
@@ -88,34 +88,15 @@ writer(void *priv)
 	}
 
 	if (mp3) {
-		lame = lame_init();
-		if (lame == NULL) {
-			fprintf(stderr, "Couldn't initialize lame encoder\n");
-			exit(EXIT_FAILURE);
-		}
+		aw = audio_writer_lame(ctx.fout, ctx.stream->sample_rate,
+		    ctx.stream->layout.channel_count, BUF_TIME_S, ctx.mono);
+	} else {
+		aw = audio_writer_raw(ctx.fout);
+	}
 
-		buf_size = (1.25 * BUF_TIME_S * ctx.stream->sample_rate) + 7200;
-		mp3buf = malloc(buf_size);
-		if (mp3buf == NULL) {
-			fprintf(stderr, "No memory for mp3 encoding buffer\n");
-			exit(EXIT_FAILURE);
-		}
-
-		lame_set_num_channels(lame, ctx.stream->layout.channel_count);
-		lame_set_mode(lame, ctx.mono ? MONO : STEREO);
-		lame_set_error_protection(lame, 1);
-		lame_set_in_samplerate(lame, ctx.stream->sample_rate);
-		lame_set_findReplayGain(lame, 1);
-		lame_set_asm_optimizations(lame, MMX, 1);
-		lame_set_asm_optimizations(lame, SSE, 1);
-		lame_set_quality(lame, 3);
-		lame_set_bWriteVbrTag(lame, 1);
-		lame_set_VBR(lame, vbr_mtrh);
-		lame_set_VBR_q(lame, 3);
-		lame_set_VBR_min_bitrate_kbps(lame, 96);
-		lame_set_VBR_max_bitrate_kbps(lame, 320);
-
-		lame_init_params(lame);
+	if (aw == NULL) {
+		fprintf(stderr, "castty was not compiled with support for the selected format");
+		exit(EXIT_FAILURE);
 	}
 
 	while (1) {
@@ -123,63 +104,8 @@ writer(void *priv)
 		char *read_buf = soundio_ring_buffer_read_ptr(ctx.rb);
 
 		if (recording) {
-			if (mp3) {
-				int blen;
-
-				switch (ctx.stream->format) {
-				case SoundIoFormatFloat32LE:
-				case SoundIoFormatFloat32BE:
-					blen = lame_encode_buffer_ieee_float(lame,
-					    (float *)read_buf,
-					    (float *)(read_buf + (fill_bytes / 2)),
-					    fill_bytes / ctx.stream->bytes_per_frame,
-					    mp3buf, buf_size);
-					break;
-				case SoundIoFormatU32BE:
-				case SoundIoFormatU32LE:
-					blen = lame_encode_buffer_long2(lame,
-					    (long *)read_buf,
-					    (long *)(read_buf + (fill_bytes / 2)),
-					    fill_bytes / ctx.stream->bytes_per_frame,
-					    mp3buf, buf_size);
-					break;
-
-				case SoundIoFormatS32BE:
-				case SoundIoFormatS32LE:
-				case SoundIoFormatS24BE:
-				case SoundIoFormatS24LE:
-				case SoundIoFormatU24BE:
-				case SoundIoFormatU24LE:
-					blen = lame_encode_buffer_int(lame,
-					    (int *)read_buf,
-					    (int *)(read_buf + (fill_bytes / 2)),
-					    fill_bytes / ctx.stream->bytes_per_frame,
-					    mp3buf, buf_size);
-					break;
-
-				case SoundIoFormatS16BE:
-				case SoundIoFormatS16LE:
-				case SoundIoFormatU16BE:
-				case SoundIoFormatU16LE:
-					blen = lame_encode_buffer(lame,
-					    (short *)read_buf,
-					    (short *)(read_buf + (fill_bytes / 2)),
-					    fill_bytes / ctx.stream->bytes_per_frame,
-					    mp3buf, buf_size);
-					break;
-				default:
-					fprintf(stderr, "Invalid format!\n");
-					exit(EXIT_FAILURE);
-				}
-
-				fwrite(mp3buf, 1, blen, ctx.fout);
-			} else {
-				size_t amt = fwrite(read_buf, 1, fill_bytes, ctx.fout);
-				if ((int)amt != fill_bytes) {
-					perror("fwrite");
-					exit(EXIT_FAILURE);
-				}
-			}
+			audio_writer_write(aw, ctx.stream->format, read_buf, fill_bytes,
+			    ctx.stream->bytes_per_frame);
 		}
 		soundio_ring_buffer_advance_read_ptr(ctx.rb, fill_bytes);
 
@@ -189,13 +115,7 @@ writer(void *priv)
 		}
 	}
 
-	if (mp3) {
-		int blen = lame_encode_flush(lame, mp3buf, buf_size);
-		fwrite(mp3buf, 1, blen, ctx.fout);
-
-		lame_close(lame);
-		free(mp3buf);
-	}
+	audio_writer_destroy(aw);
 
 	return NULL;
 }
