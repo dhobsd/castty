@@ -16,6 +16,7 @@
 #include <unistd.h>
 
 #include "castty.h"
+#include "audio/writer-lame.h"
 
 extern char **environ;
 
@@ -301,7 +302,7 @@ main(int argc, char **argv)
 	oa.env = serialize_env();
 	exec_cmd = NULL;
 
-	while ((ch = getopt(argc, argv, "?a:c:D:d:e:hlmpr:t:")) != EOF) {
+	while ((ch = getopt(argc, argv, "?a:c:D:d:e:hlpr:t:" LAME_OPT)) != EOF) {
 		char *e;
 
 		switch (ch) {
