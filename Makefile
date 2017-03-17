@@ -1,3 +1,5 @@
+-include config.mk
+
 CC = gcc
 
 WARNINGS := -Wall -Wextra -Wshadow
