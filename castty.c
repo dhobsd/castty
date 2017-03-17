@@ -103,7 +103,7 @@ handle_sigwinch(int sig)
 	if (rwin.ws_col < win.ws_col || rwin.ws_row < win.ws_row) {
 		win.ws_row = MIN(win.ws_row, rwin.ws_row);
 		win.ws_col = MIN(win.ws_col, rwin.ws_col);
-		win = rwin;
+
 		if (ioctl(masterfd, TIOCSWINSZ, &win) == -1) {
 			perror("ioctl(TIOCSWINSZ)");
 			exit(EXIT_FAILURE);
