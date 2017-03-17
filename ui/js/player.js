@@ -140,10 +140,10 @@ var player = function(audioFile, containerElem, events) {
 		}
 
 		if (audioFile) {
-			Player.toggle = $('<button id="playToggle" disabled>(Loading)</button>')
+			Player.toggle = $('<button id="playToggle" disabled><i class="material-icons">&#xE88B;</button>')
 			    .appendTo(Player.controls);
 		} else {
-			Player.toggle = $('<button id="playToggle"><i class="material-icons">play_arrow</i></button>')
+			Player.toggle = $('<button id="playToggle"><i class="material-icons">&#xE037;</i></button>')
 			    .appendTo(Player.controls);
 			Player.startable = 1;
 		}
@@ -165,7 +165,7 @@ var player = function(audioFile, containerElem, events) {
 
 				if (Player.paused) {
 					Player.paused = 0;
-					Player.toggle.html('<i class="material-icons">pause</i>');
+					Player.toggle.html('<i class="material-icons">&#xE034;</i>');
 					Player.start = Date.now();
 
 					if (audioFile) {
@@ -190,7 +190,7 @@ var player = function(audioFile, containerElem, events) {
 						    getTimeout(Player.timerHandle);
 						clearTimeout(Player.timerHandle);
 					}
-					Player.toggle.html('<i class="material-icons">play_arrow</i>');
+					Player.toggle.html('<i class="material-icons">&#xE037;</i>');
 					Player.paused = 1;
 				}
 			}
@@ -254,7 +254,7 @@ var player = function(audioFile, containerElem, events) {
 				Player.paused = 1;
 				Player.rem = 0;
 				Player.eventOff = 0;
-				Player.toggle.html('<i class="material-icons">replay</i>');
+				Player.toggle.html('<i class="material-icons">&#xE042;</i>');
 
 				clearTimeout(Player.timerHandle);
 				clearTimeout(Player.seekerHandle);
@@ -269,7 +269,7 @@ var player = function(audioFile, containerElem, events) {
 			$(Player.audio).on('canplaythrough', function() {
 				Player.startable = 1;
 				if (!Player.restarted) {
-					Player.toggle.html('<i class="material-icons">play_arrow</i>');
+					Player.toggle.html('<i class="material-icons">&#xE037;</i>');
 				} else {
 					Player.restarted = 0;
 				}
