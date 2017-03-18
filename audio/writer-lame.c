@@ -7,10 +7,6 @@
 #include "writer-lame.h"
 #include "writer.h"
 
-enum {
-	MP3_BUF_SIZE = 1UL << 22,
-};
-
 struct lame {
 	FILE *outfile;
 	lame_t lflags;
@@ -127,7 +123,7 @@ audio_writer_lame(FILE *outfile, int sample_rate, int nchannels, int buf_time_s,
 	}
 
 	lame->buf_size = 1.25 * buf_time_s * sample_rate + 7200;
-	lame->buf = malloc(MP3_BUF_SIZE);
+	lame->buf = malloc(lame->buf_size);
 	if (lame->buf == NULL) {
 		fprintf(stderr, "No memory for mp3 buffer\n");
 		exit(EXIT_FAILURE);
