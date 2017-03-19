@@ -27,8 +27,8 @@ but you will have to build it yourself.
 
 CasTTY also depends on [LAME](http://lame.sourceforge.net/) (and in particular,
 libmp3lame) for on-the-fly MP3 encoding. It is possible to compile without LAME
-(and therefore without mp3 support) by passing `WITH_LAME=no` to make or
-creating the file `config.mk` with the contents `WITH_LAME = no`.
+(and therefore without mp3 support) by modifying `config.mk` to contain 
+`WITH_LAME = no`.
 
 There are no UI build dependencies because I find that idea a little silly.
 

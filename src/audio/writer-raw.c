@@ -3,8 +3,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-#include "writer-raw.h"
-#include "writer.h"
+#include "audio/writer-raw.h"
+#include "audio/writer.h"
 
 struct raw {
 	FILE *outfile;

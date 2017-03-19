@@ -4,8 +4,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-#include "writer-lame.h"
-#include "writer.h"
+#include "audio/writer-lame.h"
+#include "audio/writer.h"
 
 struct lame {
 	FILE *outfile;
