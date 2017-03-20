@@ -84,7 +84,7 @@ handle_sigchld(int sig)
 	(void)sig;
 
 	while ((pid = waitpid(-1, &status, WNOHANG)) > 0) {
-		if (pid == child || pid == subchild) {
+		if (pid == child) {
 			close(STDIN_FILENO);
 		}
 	}
