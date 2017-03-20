@@ -9,7 +9,6 @@ void
 inputproc(int masterfd, int controlfd)
 {
 	unsigned char ibuf[BUFSIZ], *p;
-	unsigned cmdbytes;
 	enum input_state {
 		STATE_PASSTHROUGH,
 		STATE_COMMAND,
@@ -17,7 +16,6 @@ inputproc(int masterfd, int controlfd)
 	ssize_t nread;
 
 	input_state = STATE_PASSTHROUGH;
-	cmdbytes = 0;
 
 	while ((nread = read(STDIN_FILENO, ibuf, BUFSIZ)) > 0) {
 		unsigned char *cmdstart;
