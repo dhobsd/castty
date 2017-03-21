@@ -12,7 +12,9 @@
 #include <poll.h>
 #include <unistd.h>
 
+#include "audio.h"
 #include "castty.h"
+#include "record.h"
 #include "utf8.h"
 
 static int audio_enabled, paused, start_paused;

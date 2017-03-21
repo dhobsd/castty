@@ -1,9 +1,11 @@
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
 #include <unistd.h>
 
 #include "castty.h"
+#include "record.h"
 
 void
 inputproc(int masterfd, int controlfd)

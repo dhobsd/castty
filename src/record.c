@@ -11,8 +11,10 @@
 #include <termios.h>
 #include <unistd.h>
 
-#include "castty.h"
 #include "audio/writer-lame.h"
+#include "audio.h"
+#include "castty.h"
+#include "record.h"
 
 extern char **environ;
 

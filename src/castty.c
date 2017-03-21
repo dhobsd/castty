@@ -3,6 +3,7 @@
 #include <stdlib.h>
 
 #include "castty.h"
+#include "record.h"
 
 static void
 usage(int status)
