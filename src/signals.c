@@ -1,4 +1,7 @@
+#include <sys/types.h>
 #include <sys/ioctl.h>
+#include <sys/wait.h>
+#include <sys/signal.h>
 
 #include <stdio.h>
 #include <stdlib.h>
