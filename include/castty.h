@@ -46,6 +46,8 @@ void audio_toggle_mp3(void);
 void audio_toggle_mute(void);
 void audio_toggle_pause(void);
 
+int record_main(int, char **);
+
 void setup_sighandlers(void);
 
 void xclose(int);
