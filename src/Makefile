@@ -19,7 +19,7 @@ ifeq ($(DEBUG),yes)
 endif
 
 TARGET := castty
-OBJ := audio.o castty.o input.o output.o shell.o xwrap.o audio/writer-raw.o
+OBJ := audio.o castty.o input.o output.o shell.o signals.o xwrap.o audio/writer-raw.o
 
 # Optional dependency libmp3lame (default: yes)
 ifneq ("$(WITH_LAME)", "no")

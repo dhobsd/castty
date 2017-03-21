@@ -9,7 +9,6 @@
 #include <stdlib.h>
 
 #include <errno.h>
-#include <execinfo.h>
 #include <fcntl.h>
 #include <signal.h>
 #include <termios.h>
@@ -20,100 +19,11 @@
 
 extern char **environ;
 
-static struct winsize owin, rwin, win;
-static pid_t child, subchild;
-static struct termios tt;
-static FILE *debug_out;
-static int masterfd;
-
-static void
-do_backtrace(int sig, siginfo_t *siginfo, void *context)
-{
-	void *callstack[128];
-	char **strs;
-	int frames;
-
-	(void)context;
-
-	frames = backtrace(callstack, 128);
-	strs = backtrace_symbols(callstack, frames);
-
-	fprintf(stderr, "\r\nProcess %d got signal %d\r\n"
-	    "\tat faultaddr: %p errno: %d code: %d\r\n",
-	    siginfo->si_pid, sig, siginfo->si_addr, siginfo->si_errno,
-	    siginfo->si_code);
-	if (debug_out) {
-		fprintf(debug_out, "Process %d got signal %d\n"
-		    "\tat faultaddr: %p errno: %d code: %d\n",
-		    siginfo->si_pid, sig, siginfo->si_addr, siginfo->si_errno,
-		    siginfo->si_code);
-	}
-
-	fprintf(stderr, "Backtrace:\r\n");
-	if (debug_out) {
-		fprintf(debug_out, "Backtrace:\n");
-	}
-
-	for (int i = 0; i < frames; ++i) {
-		fprintf(stderr, "\n\r%s", strs[i]);
-		if (debug_out) {
-			fprintf(debug_out, "%s\n", strs[i]);
-		}
-	}
-
-	fprintf(stderr, "\r\n");
-	free(strs);
-
-	if (ioctl(STDOUT_FILENO, TIOCSWINSZ, &rwin) == -1) {
-		perror("ioctl(TIOCSWINSZ)");
-	}
-
-	if (tcsetattr(STDOUT_FILENO, TCSAFLUSH, &tt) == -1) {
-		perror("tcsetattr");
-	}
-
-	exit(EXIT_FAILURE);
-}
-
-static void
-handle_sigchld(int sig)
-{
-	int status;
-	pid_t pid;
-
-	(void)sig;
-
-	while ((pid = waitpid(-1, &status, WNOHANG)) > 0) {
-		if (pid == child) {
-			close(STDIN_FILENO);
-		}
-	}
-}
-
-static void
-handle_sigwinch(int sig)
-{
-
-	(void)sig;
-
-	/* Allow resizes, but only if they are smaller than our original window
-	 * size. In any case, restore to the current window size.
-	 */
-	if (ioctl(STDIN_FILENO, TIOCGWINSZ, &rwin) == -1) {
-		perror("ioctl(TIOCGWINSZ)");
-		exit(EXIT_FAILURE);
-	}
-
-	if (rwin.ws_col < owin.ws_col || rwin.ws_row < owin.ws_row) {
-		win.ws_row = MIN(win.ws_row, owin.ws_row);
-		win.ws_col = MIN(win.ws_col, owin.ws_col);
-
-		if (ioctl(masterfd, TIOCSWINSZ, &win) == -1) {
-			perror("ioctl(TIOCSWINSZ)");
-			exit(EXIT_FAILURE);
-		}
-	}
-}
+struct winsize owin, rwin, win;
+struct termios tt;
+FILE *debug_out;
+int masterfd;
+pid_t child;
 
 static void
 set_raw_input(void)
@@ -248,46 +158,6 @@ serialize_env(void)
 	}
 
 	return p;
-}
-
-static void
-setup_sighandlers(void)
-{
-
-	stack_t ss;
-	memset(&ss, 0, sizeof(ss));
-	ss.ss_size = 4 * SIGSTKSZ;
-	ss.ss_sp = calloc(1, ss.ss_size);
-	if (ss.ss_sp == NULL) {
-		perror("calloc");
-		exit(EXIT_FAILURE);
-	}
-	sigaltstack(&ss, 0);
-
-	struct sigaction chld;
-	chld.sa_flags = 0;
-	(void)sigemptyset(&chld.sa_mask);
-	chld.sa_handler = handle_sigchld;
-	xsigaction(SIGCHLD, &chld, NULL);
-
-	struct sigaction crash;
-	crash.sa_flags = 0;
-	(void)sigemptyset(&crash.sa_mask);
-	crash.sa_sigaction = do_backtrace;
-	xsigaction(SIGSEGV, &crash, NULL);
-	xsigaction(SIGBUS, &crash, NULL);
-	xsigaction(SIGFPE, &crash, NULL);
-	xsigaction(SIGILL, &crash, NULL);
-	xsigaction(SIGTRAP, &crash, NULL);
-	xsigaction(SIGABRT, &crash, NULL);
-	xsigaction(SIGPIPE, &crash, NULL);
-	xsigaction(SIGSYS, &crash, NULL);
-
-	struct sigaction winch;
-	winch.sa_flags = 0;
-	(void)sigemptyset(&winch.sa_mask);
-	winch.sa_handler = handle_sigwinch;
-	xsigaction(SIGWINCH, &winch, NULL);
 }
 
 int
@@ -433,7 +303,7 @@ main(int argc, char **argv)
 	}
 
 	if (child == 0) {
-		subchild = fork();
+		pid_t subchild = fork();
 		if (subchild < 0) {
 			perror("fork");
 			if (kill(0, SIGTERM) == -1) {

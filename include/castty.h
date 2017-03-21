@@ -46,6 +46,8 @@ void audio_toggle_mp3(void);
 void audio_toggle_mute(void);
 void audio_toggle_pause(void);
 
+void setup_sighandlers(void);
+
 void xclose(int);
 int xdup2(int, int);
 void xfclose(FILE *);
