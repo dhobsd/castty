@@ -11,7 +11,7 @@ usage(int status)
 
 	fprintf(stderr, "usage: castty record [options]\n"
 	    " record    Create a new recording. See castty record -h for\n"
-	    "           options specific to recording.");
+	    "           options specific to recording.\n");
 
 	exit(status);
 }
