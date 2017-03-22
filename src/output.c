@@ -121,7 +121,7 @@ handle_input(unsigned char *buf, size_t buflen)
 					if (cp > 0xffff) {
 						uint32_t h, l;
 						h = ((cp - 0x10000) >> 10) + 0xd800;
-						l = ((cp - 0x10000) & 1023) + 0xdc00;
+						l = ((cp - 0x10000) & 0x3ff) + 0xdc00;
 						fprintf(evout, "\\u%04" PRIx32 "\\u%04" PRIx32, h, l);
 					} else {
 						fprintf(evout, "\\u%04" PRIx32, cp);
