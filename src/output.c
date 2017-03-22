@@ -118,9 +118,16 @@ handle_input(unsigned char *buf, size_t buflen)
 			if ((cp < 128 && !isprint(cp)) ||
 			    cp > 128) {
 				if (state == UTF8_ACCEPT) {
-					fprintf(evout, "\\u%04" PRIx32, cp);
+					if (cp > 0xffff) {
+						uint32_t h, l;
+						h = ((cp - 0x10000) >> 10) + 0xd800;
+						l = ((cp - 0x10000) & 1023) + 0xdc00;
+						fprintf(evout, "\\u%04" PRIx32 "\\u%04" PRIx32, h, l);
+					} else {
+						fprintf(evout, "\\u%04" PRIx32, cp);
+					}
 				} else {
-					fputs("\\u1f4a9", evout);
+					fputs("\\ud83d\\udca9", evout);
 				}
 			} else {
 				switch (buf[j]) {
