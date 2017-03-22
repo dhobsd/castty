@@ -66,6 +66,16 @@ xsigaction(int signum, const struct sigaction *act, struct sigaction *oldact)
 }
 
 void
+xtcgetattr(int fd, struct termios *tio)
+{
+
+	if (tcgetattr(fd, tio) == -1) {
+		perror("tcgetattr");
+		exit(EXIT_FAILURE);
+	}
+}
+
+void
 xtcsetattr(int fd, int opt, const struct termios *tio)
 {
 

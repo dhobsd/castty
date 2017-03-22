@@ -3,7 +3,7 @@
 
 double audio_clock_ms(void);
 void audio_exit(void);
-void audio_list(void);
+void audio_list_inputs(void);
 void audio_mute(void);
 void audio_init(const char *devid, const char *outfile);
 void audio_start(void);

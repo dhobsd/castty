@@ -221,7 +221,7 @@ record_main(int argc, char **argv)
 			oa.cmd = escape(exec_cmd);
 			break;
 		case 'l':
-			audio_list();
+			audio_list_inputs();
 			exit(EXIT_SUCCESS);
 			break;
 		case 'm':
@@ -273,10 +273,7 @@ record_main(int argc, char **argv)
 	}
 	oa.controlfd = controlfd[0];
 
-	if (tcgetattr(STDIN_FILENO, &tt) == -1) {
-		perror("tcgetattr");
-		exit(EXIT_FAILURE);
-	}
+	xtcgetattr(STDIN_FILENO, &tt);
 
 	oa.masterfd = masterfd = posix_openpt(O_RDWR | O_NOCTTY);
 	if (masterfd == -1) {
@@ -347,14 +344,11 @@ record_main(int argc, char **argv)
 
 	signal(SIGWINCH, NULL);
 
-	if (ioctl(STDOUT_FILENO, TIOCSWINSZ, &rwin) == -1) {
+	if (ioctl(STDIN_FILENO, TIOCSWINSZ, &rwin) == -1) {
 		perror("ioctl(TIOCSWINSZ)");
 	}
 
-	if (tcsetattr(STDOUT_FILENO, TCSAFLUSH, &tt) == -1) {
-		perror("tcsetattr");
-	}
+	xtcsetattr(STDIN_FILENO, TCSAFLUSH, &tt);
 
 	return 0;
-
 }

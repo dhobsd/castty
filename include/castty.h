@@ -13,6 +13,7 @@ int xdup2(int, int);
 void xfclose(FILE *);
 FILE *xfopen(const char *, const char *);
 void xsigaction(int signum, const struct sigaction *act, struct sigaction *oldact);
+void xtcgetattr(int, struct termios *);
 void xtcsetattr(int, int, const struct termios *);
 size_t xwrite(int, void *, size_t);
 

@@ -483,7 +483,7 @@ audio_exit(void)
 }
 
 void
-audio_list(void)
+audio_list_inputs(void)
 {
 	struct SoundIo *soundio;
 	int err;
