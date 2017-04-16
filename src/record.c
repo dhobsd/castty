@@ -163,14 +163,17 @@ static void
 usage(int status)
 {
 
-	fprintf(stderr, "usage: castty record [-acdelrt] [out.json]\n"
+	fprintf(stderr, "usage: castty record [-acDdehl" LAME_OPT "prt] [out.json]\n"
 	    " -a <outfile>   Output audio to <outfile>. Must be specified with -d.\n"
 	    " -c <cols>      Use <cols> columns in the recorded shell session.\n"
 	    " -D <outfile>   Send debugging information into <outfile>.\n"
 	    " -d <device>    Use audio device <device> for input.\n"
 	    " -e <cmd>       Execute <cmd> from the recorded shell session.\n"
+	    " -h             Show this help.\n"
 	    " -l             List available audio input devices and exit.\n"
+#ifdef WITH_LAME
 	    " -m             Encode audio to mp3 before writing.\n"
+#endif
 	    " -p             Begin the recording in paused mode.\n"
 	    " -r <rows>      Use <rows> rows in the recorded shell session.\n"
 	    " -t <title>     Title of the cast.\n"
