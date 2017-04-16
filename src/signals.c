@@ -84,6 +84,7 @@ handle_sigchld(int sig)
 static void
 handle_sigwinch(int sig)
 {
+	unsigned short minrow, mincol;
 
 	(void)sig;
 
@@ -95,9 +96,12 @@ handle_sigwinch(int sig)
 		exit(EXIT_FAILURE);
 	}
 
-	if (rwin.ws_col < owin.ws_col || rwin.ws_row < owin.ws_row) {
-		win.ws_row = MIN(win.ws_row, owin.ws_row);
-		win.ws_col = MIN(win.ws_col, owin.ws_col);
+	minrow = MIN(rwin.ws_row, owin.ws_row);
+	mincol = MIN(rwin.ws_col, owin.ws_col);
+
+	if (win.ws_row != minrow || win.ws_col != mincol) {
+		win.ws_row = minrow;
+		win.ws_col = mincol;
 
 		if (ioctl(masterfd, TIOCSWINSZ, &win) == -1) {
 			perror("ioctl(TIOCSWINSZ)");
@@ -140,7 +144,7 @@ setup_sighandlers(void)
 	xsigaction(SIGSYS, &crash, NULL);
 
 	struct sigaction winch;
-	winch.sa_flags = 0;
+	winch.sa_flags = SA_RESTART;
 	(void)sigemptyset(&winch.sa_mask);
 	winch.sa_handler = handle_sigwinch;
 	xsigaction(SIGWINCH, &winch, NULL);
