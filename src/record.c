@@ -208,8 +208,8 @@ record_main(int argc, char **argv)
 			errno = 0;
 			oa.cols = strtol(optarg, &e, 10);
 			if (e == optarg || errno != 0 || oa.cols > 1000) {
-				fprintf(stderr, "castty: Invalid column count: %d\n",
-				    oa.cols);
+				fprintf(stderr, "castty: Invalid column count: %s\n",
+				    optarg);
 				exit(EXIT_FAILURE);
 			}
 			break;
@@ -237,8 +237,8 @@ record_main(int argc, char **argv)
 			errno = 0;
 			oa.rows = strtol(optarg, &e, 10);
 			if (e == optarg || errno != 0 || oa.rows > 1000) {
-				fprintf(stderr, "castty: Invalid row count: %d\n",
-				    oa.rows);
+				fprintf(stderr, "castty: Invalid row count: %s\n",
+				    optarg);
 				exit(EXIT_FAILURE);
 			}
 			break;
