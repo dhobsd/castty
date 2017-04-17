@@ -1,5 +1,6 @@
 #include <sys/ioctl.h>
 
+#include <assert.h>
 #include <stdio.h>
 #include <time.h>
 #include <string.h>
@@ -47,6 +48,8 @@ escape(const char *from)
 	unsigned i, o;
 	char *p;
 
+	assert(from);
+
 	p = malloc(strlen(from) * 2 + 1);
 	if (p == NULL) {
 		perror("malloc");
@@ -90,11 +93,10 @@ serialize_env(void)
 
 	for (unsigned i = 0; environ[i] != NULL; i++) {
 		char *e, *k, *v;
-		int useful;
+		int useful, rv;
 		size_t l;
 
 		e = escape(environ[i]);
-		l = strlen(e);
 
 		k = e;
 		v = strchr(e, '=');
@@ -103,21 +105,21 @@ serialize_env(void)
 			exit(EXIT_FAILURE);
 		}
 
-		*v = '\0';
+		*v++ = '\0';
 
 		useful = 0;
 		for (unsigned j = 0; j < sizeof interesting / sizeof interesting[0]; j++) {
 			if (strcmp(k, interesting[j]) == 0) {
 				useful = 1;
+				break;
 			}
 		}
 
 		if (!useful) {
-			continue;
+			goto not_useful;
 		}
 
-		v++;
-
+		l = strlen(k) + strlen(v);
 		/* 7 is for two sets of quotes, a colon, a comma, and a 0 byte */
 		if (o + l + 7 >= s) {
 			size_t ns;
@@ -134,20 +136,12 @@ serialize_env(void)
 			p = r;
 		}
 
-		p[o++] = '"';
-		memcpy(p + o, k, strlen(k));
-		o += strlen(k);
-		p[o++] = '"';
-		p[o++] = ':';
-		p[o++] = '"';
-		memcpy(p + o, v, strlen(v));
-		o += strlen(v);
-		p[o++] = '"';
-		if (environ[i + 1]) {
-			p[o++] = ',';
-		}
+		rv = snprintf(&p[o], s - o, "\"%s\":\"%s\",", k, v);
+		assert(rv > 0);
+		assert((unsigned)rv < s - o);
+		o += rv;
 
-		free(e);
+not_useful:	free(e);
 	}
 
 	if (p[o - 1] == ',') {
@@ -163,14 +157,17 @@ static void
 usage(int status)
 {
 
-	fprintf(stderr, "usage: castty record [-acdelrt] [out.json]\n"
+	fprintf(stderr, "usage: castty record [-acDdehl" LAME_OPT "prt] [out.json]\n"
 	    " -a <outfile>   Output audio to <outfile>. Must be specified with -d.\n"
 	    " -c <cols>      Use <cols> columns in the recorded shell session.\n"
 	    " -D <outfile>   Send debugging information into <outfile>.\n"
 	    " -d <device>    Use audio device <device> for input.\n"
 	    " -e <cmd>       Execute <cmd> from the recorded shell session.\n"
+	    " -h             Show this help.\n"
 	    " -l             List available audio input devices and exit.\n"
+#ifdef WITH_LAME
 	    " -m             Encode audio to mp3 before writing.\n"
+#endif
 	    " -p             Begin the recording in paused mode.\n"
 	    " -r <rows>      Use <rows> rows in the recorded shell session.\n"
 	    " -t <title>     Title of the cast.\n"
@@ -205,8 +202,8 @@ record_main(int argc, char **argv)
 			errno = 0;
 			oa.cols = strtol(optarg, &e, 10);
 			if (e == optarg || errno != 0 || oa.cols > 1000) {
-				fprintf(stderr, "castty: Invalid column count: %d\n",
-				    oa.cols);
+				fprintf(stderr, "castty: Invalid column count: %s\n",
+				    optarg);
 				exit(EXIT_FAILURE);
 			}
 			break;
@@ -234,8 +231,8 @@ record_main(int argc, char **argv)
 			errno = 0;
 			oa.rows = strtol(optarg, &e, 10);
 			if (e == optarg || errno != 0 || oa.rows > 1000) {
-				fprintf(stderr, "castty: Invalid row count: %d\n",
-				    oa.rows);
+				fprintf(stderr, "castty: Invalid row count: %s\n",
+				    optarg);
 				exit(EXIT_FAILURE);
 			}
 			break;

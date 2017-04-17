@@ -1,3 +1,3 @@
 PREFIX = /usr/local
-DEBUG = yes
+.DEFAULT_GOAL = debug
 WITH_LAME = yes

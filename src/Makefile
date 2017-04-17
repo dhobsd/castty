@@ -11,12 +11,8 @@ ifeq ($(UNAME_S),Darwin)
 endif
 
 CFLAGS = -O2 -I../include -std=c11 -MMD -MP $(WARNINGS)
-LDFLAGS = -L/usr/local/lib
+LDFLAGS = -O2 -L/usr/local/lib
 LDLIBS = -lsoundio -lpthread
-
-ifeq ($(DEBUG),yes)
-	CFLAGS += -O0 -g3 -fno-omit-frame-pointer
-endif
 
 TARGET := castty
 OBJ := audio.o castty.o input.o output.o record.o shell.o signals.o xwrap.o audio/writer-raw.o
@@ -31,11 +27,15 @@ endif
 all: $(TARGET)
 $(TARGET): $(OBJ)
 
+debug: all
+debug: CFLAGS += -Og -ggdb3 -fno-omit-frame-pointer
+debug: LDFLAGS += -Og -ggdb3
+
 clean:
 	$(RM) $(OBJ) $(OBJ:.o=.d) $(TARGET)
 
-install:
-	install -m 0755 castty $(PREFIX)/bin
+install: $(TARGET)
+	install -Dm755 -s $(TARGET) -t $(DESTDIR)$(PREFIX)/bin
 
 -include $(OBJ:.o=.d)
 

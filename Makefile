@@ -1,8 +1,5 @@
-all:
-	make -C src all
-
-clean:
-	make -C src clean
-
-install:
-	make -C src install
+default:
+	$(MAKE) -C src
+.DEFAULT:
+	$(MAKE) -C src $@
+.PHONY: default .DEFAULT
