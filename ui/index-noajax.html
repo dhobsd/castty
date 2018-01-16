@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html>
+	<head>
+		<meta charset="utf-8" />
+		<title></title>
+		<link rel="stylesheet" href="css/min.css" />
+		<link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet">
+		<style>
+			#controls {
+				background: #000;
+			}
+			button {
+				color: #fff;
+				background: none;
+				border: none;
+				font-size: 13pt;
+				height: 30px;
+				width: 3%;
+				margin: 0 0 0 2px;
+			}
+			button:focus {
+			    outline: none;
+			}
+                        .rangeslider--horizontal {
+                                margin: 8px 2% 0 1%;
+                                float:right;
+                                width: 93%;
+                        }
+		</style>
+		<script src="js/min.js"></script>
+		<script src="js/player.js"></script>
+	</head>
+	<body>
+		<div id="container"></div>
+		<!-- The file below is a normal asciinema recording
+		     with "var data =" line prepended. -->
+		<script src="asciicast.js"></script>
+		<script>
+			// You can pass null instead of audio
+			var p = player("beep5.mp3", $("#container"), data);
+		</script>
+	</body>
+</html>
