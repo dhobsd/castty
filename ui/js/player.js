@@ -278,6 +278,7 @@ var player = function(audioFile, containerElem, events) {
 			});
 		}
 
+		Player.audio.load();
 		return Player;
 	}
 
