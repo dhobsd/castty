@@ -61,6 +61,8 @@ escape(const char *from)
 		case '\\':
 		case '"':
 			p[o++] = '\\';
+			p[o++] = from[i];
+			break;
 		default:
 			p[o++] = from[i];
 		}
