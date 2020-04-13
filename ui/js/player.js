@@ -161,6 +161,7 @@ var player = function(audioFile, containerElem, events) {
 					Player.ended = 0;
 					Player.paused = 1;
 					Player.restarted = 1;
+					Player.pos = 0;
 				}
 
 				if (Player.paused) {
@@ -277,6 +278,7 @@ var player = function(audioFile, containerElem, events) {
 			});
 		}
 
+		Player.audio.load();
 		return Player;
 	}
 
