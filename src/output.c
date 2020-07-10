@@ -69,8 +69,9 @@ handle_command(enum control_command cmd)
 }
 
 static void
-handle_input(unsigned char *buf, size_t buflen)
+handle_input(unsigned char *buf, size_t buflen, int format_version)
 {
+	assert(format_version == 1 || format_version == 2);
 	static int first = 1;
 	double delta;
 
@@ -109,7 +110,11 @@ handle_input(unsigned char *buf, size_t buflen)
 
 	dur += delta;
 
-	fprintf(evout, ",[%0.4f,\"", delta / 1000);
+	if (format_version == 2) {
+		fprintf(evout, "[%0.4f,\"o\",\"", dur / 1000);
+	} else if (format_version == 1) {	
+		fprintf(evout, ",[%0.4f,\"", delta / 1000);
+	}
 
 	uint32_t state, cp;
 	state = 0;
@@ -133,7 +138,9 @@ handle_input(unsigned char *buf, size_t buflen)
 				switch (buf[j]) {
 				case '"':
 				case '\\':
-					fputc('\\', evout);
+					fputc('\\', evout); // output backslash for escaping
+					fputc(buf[j], evout); // print the character itself
+					break;
 				default:
 					fputc(buf[j], evout);
 					break;
@@ -142,7 +149,7 @@ handle_input(unsigned char *buf, size_t buflen)
 		}
 	}
 
-	fputs("\"]", evout);
+	fputs("\"]\n", evout);
 }
 
 void
@@ -154,6 +161,8 @@ outputproc(struct outargs *oa)
 
 	status = EXIT_SUCCESS;
 	master = oa->masterfd;
+
+	assert(oa->format_version == 1 || oa->format_version == 2);
 
 	if (oa->audioout || oa->devid) {
 		assert(oa->audioout && oa->devid);
@@ -168,25 +177,34 @@ outputproc(struct outargs *oa)
 
 	evout = xfopen(oa->outfn, "wb");
 
-	/* Write asciicast v1 header and append events. Format defined at
-	 * https://github.com/asciinema/asciinema/blob/master/doc/asciicast-v1.md
+	/* Write asciicast header and append events. Format defined at
+	 * v1 https://github.com/asciinema/asciinema/blob/master/doc/asciicast-v1.md
+	 * v2 https://github.com/asciinema/asciinema/blob/master/doc/asciicast-v2.md
 	 *
-	 * We insert an empty first record to avoid the hassle of dealing with
+	 * With v1, we insert an empty first record to avoid the hassle of dealing with
 	 * ES (still) not supporting trailing commas.
 	 */
 	fprintf(evout,
-	    "{\n"
-	    " \"version\": 1,\n"
-	    " \"width\": %d,\n"
-	    " \"height\": %d,\n"
-	    " \"command\": \"%s\",\n"
-	    " \"title\": \"%s\",\n"
-	    " \"env\": %s,\n"
-	    " \"stdout\":[[0,\"\"]",
+	    "{                        " // have room to write duration later
+	    "\"version\": %d, "
+	    "\"width\": %d, "
+	    "\"height\": %d, "
+	    "\"command\": \"%s\", "
+	    "\"title\": \"%s\", "
+	    "\"env\": %s",
+	    oa->format_version,
 	    oa->cols, oa->rows,
 	    oa->cmd ? oa->cmd : "",
 	    oa->title ? oa->title : "",
-	    oa->env);
+	    oa->env
+	);
+	if (oa->format_version == 2) {
+		// v2 header finished here, data will be appended in separate lines
+		fprintf(evout, "}\n");
+	} else if (oa->format_version == 1) {
+		// v1 header finished, console data is appended in structure
+		fprintf(evout, ",\"stdout\":[[0,\"\"]\n");
+	}
 
 	setbuf(evout, NULL);
 	setbuf(stdout, NULL);
@@ -260,14 +278,20 @@ outputproc(struct outargs *oa)
 				xwrite(STDOUT_FILENO, obuf, nread);
 
 				if (!paused) {
-					handle_input(obuf, nread);
+					handle_input(obuf, nread, oa->format_version);
 				}
 			}
 		}
 	}
 
 end:
-	fprintf(evout, "],\n \"duration\":%0.3f}", dur / 1000);
+	if (oa->format_version == 1) {
+		// closes stdout segment
+		fprintf(evout, "]}\n");
+	}
+	// seeks to header, overwriting spaces with duration
+	fseek(evout, 1L, SEEK_SET);
+	fprintf(evout, "\"duration\": %.9g, ", dur / 1000);
 
 	fflush(evout);
 
