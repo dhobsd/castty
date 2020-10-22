@@ -558,10 +558,9 @@ audio_list_inputs(void)
 			soundio_device_unref(dev);
 			continue;
 		}
-
-		printf("%4d: %s %dHz\n"
-		    "      castty -d '%s' -a audio.%s\n", i, dev->name, rate,
-		    dev->id, soundio_format_string(fmt));
+		printf("%4d: %s, %dHz, format: '%s'\n"
+		    "      castty record -d '%s' -a audio.raw\n", i, dev->name, rate,
+		    soundio_format_string(fmt), dev->id);
 		soundio_device_unref(dev);
 	}
 
