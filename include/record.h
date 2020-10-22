@@ -16,6 +16,7 @@ struct outargs {
 	int masterfd;
 	int rows;
 	int cols;
+	int use_raw;
 
 	const char *cmd;
 	const char *env;

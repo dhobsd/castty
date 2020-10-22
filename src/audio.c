@@ -51,6 +51,7 @@ static struct audio_ctx {
 	FILE *fout;
 	int active;
 	int mono;
+	int use_raw;
 
 	struct SoundIoInStream *stream;
 	struct SoundIoRingBuffer *rb;
@@ -276,7 +277,7 @@ audio_start(void)
 	}
 
 	if ((err = soundio_connect(ctx.io))) {
-		fprintf(stderr, "Couldn't connect to audio backend: %s",
+		fprintf(stderr, "Couldn't connect to audio backend: %s\n",
 		    soundio_strerror(err));
 		exit(EXIT_FAILURE);
 	}
@@ -293,7 +294,7 @@ audio_start(void)
 
 	for (int i = 0; i < ndev; i++) {
 		ctx.dev = soundio_get_input_device(ctx.io, i);
-		if (!strcmp(ctx.dev->id, ctx.devid)) {
+		if (!strcmp(ctx.dev->id, ctx.devid) && ctx.dev->is_raw == ctx.use_raw) {
 			break;
 		}
 
@@ -434,12 +435,13 @@ audio_start(void)
 }
 
 void
-audio_init(const char *devid, const char *outfile)
+audio_init(const char *devid, const char *outfile, int use_raw)
 {
 
 	ctx.active = 1;
 	ctx.fout = xfopen(outfile, "wb");
 	ctx.devid = devid;
+	ctx.use_raw = use_raw;
 }
 
 void
@@ -558,9 +560,11 @@ audio_list_inputs(void)
 			soundio_device_unref(dev);
 			continue;
 		}
-		printf("%4d: %s, %dHz, format: '%s'\n"
-		    "      castty record -d '%s' -a audio.raw\n", i, dev->name, rate,
-		    soundio_format_string(fmt), dev->id);
+		printf("%4d: %s%s, %dHz, format: '%s'\n"
+		    "      castty record -d '%s'%s -a audio.raw\n",
+		    i, dev->name, dev->is_raw ? " (raw)" : "",
+		    rate, soundio_format_string(fmt),
+		    dev->id, dev->is_raw ? " -R" : "");
 		soundio_device_unref(dev);
 	}
 
