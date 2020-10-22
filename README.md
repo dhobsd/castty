@@ -40,7 +40,7 @@ installed to a location other than `/usr/local/`, you will have to edit the
 
 ## Usage
 
-    usage: castty [-acdelrt] [out.json]
+    usage: castty record [-acdelrt] [out.json]
      -a <outfile>   Output audio to <outfile>. Must be specified with -d.
      -c <cols>      Use <cols> columns in the recorded shell session.
      -D <outfile>   Send debugging information into <outfile>
@@ -54,7 +54,7 @@ installed to a location other than `/usr/local/`, you will have to edit the
      [out.json]     Optional output filename of recorded events. If not specified,
                     a file "events.json" will be created.
 
-To list usable input devices for recording, just run `castty -l`. Output will
+To list usable input devices for recording, just run `castty record -l`. Output will
 look something like this:
 
     Available input devices:
