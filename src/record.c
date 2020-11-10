@@ -61,6 +61,8 @@ escape(const char *from)
 		case '\\':
 		case '"':
 			p[o++] = '\\';
+			p[o++] = from[i];
+			break;
 		default:
 			p[o++] = from[i];
 		}
@@ -157,7 +159,7 @@ static void
 usage(int status)
 {
 
-	fprintf(stderr, "usage: castty record [-acDdehl" LAME_OPT "prt] [out.json]\n"
+	fprintf(stderr, "usage: castty record [-acDdehl" LAME_OPT "prt] [out.cast]\n"
 	    " -a <outfile>   Output audio to <outfile>. Must be specified with -d.\n"
 	    " -c <cols>      Use <cols> columns in the recorded shell session.\n"
 	    " -D <outfile>   Send debugging information into <outfile>.\n"
@@ -173,9 +175,9 @@ usage(int status)
 	    " -R             Use a raw sound device.\n"
 	    " -t <title>     Title of the cast.\n"
 	    "\n"
-	    " [out.json]     Optional output filename of recorded events. If not specified,\n"
-	    "                a file \"events.json\" will be created.\n");
-	
+	    " [out.cast]     Optional output filename of recorded events. If not specified,\n"
+	    "                a file \"events.cast\" will be created.\n"
+	    " -2             Output asciicast v2 instead of asciicast v1 format.\n");
 	exit(status);
 }
 
@@ -192,7 +194,7 @@ record_main(int argc, char **argv)
 	oa.env = serialize_env();
 	exec_cmd = NULL;
 
-	while ((ch = getopt(argc, argv, "?a:c:D:d:e:hlpr:Rt:" LAME_OPT)) != EOF) {
+	while ((ch = getopt(argc, argv, "?a:c:D:d:e:hlpr:Rt:2" LAME_OPT)) != EOF) {
 		char *e;
 
 		switch (ch) {
@@ -228,6 +230,9 @@ record_main(int argc, char **argv)
 		case 'p':
 			oa.start_paused = 1;
 			break;
+		case '2':
+			oa.format_version = 2;
+			break;
 		case 'r':
 			errno = 0;
 			oa.rows = strtol(optarg, &e, 10);
@@ -253,6 +258,10 @@ record_main(int argc, char **argv)
 		}
 	}
 
+	if (!oa.format_version) {
+		oa.format_version = 1;
+	}
+
 	if ((oa.audioout == NULL && oa.devid != NULL) ||
 	    (oa.devid == NULL && oa.audioout != NULL)) {
 		fprintf(stderr, "If -d or -a are specified, both must appear.\n");
@@ -265,7 +274,7 @@ record_main(int argc, char **argv)
 	if (argc > 0) {
 		oa.outfn = argv[0];
 	} else {
-		oa.outfn = "events.json";
+		oa.outfn = "events.cast";
 	}
 
 	if (pipe(controlfd) != 0) {
