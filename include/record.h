@@ -17,6 +17,7 @@ struct outargs {
 	int rows;
 	int cols;
 	int format_version;
+	int use_raw;
 
 	const char *cmd;
 	const char *env;

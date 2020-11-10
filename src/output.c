@@ -170,7 +170,7 @@ outputproc(struct outargs *oa)
 
 	if (oa->audioout) {
 		audio_enabled = 1;
-		audio_init(oa->devid, oa->audioout);
+		audio_init(oa->devid, oa->audioout, oa->use_raw);
 	}
 
 	start_paused = paused = oa->start_paused;

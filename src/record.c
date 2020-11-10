@@ -172,6 +172,7 @@ usage(int status)
 #endif
 	    " -p             Begin the recording in paused mode.\n"
 	    " -r <rows>      Use <rows> rows in the recorded shell session.\n"
+	    " -R             Use a raw sound device.\n"
 	    " -t <title>     Title of the cast.\n"
 	    "\n"
 	    " [out.cast]     Optional output filename of recorded events. If not specified,\n"
@@ -193,7 +194,7 @@ record_main(int argc, char **argv)
 	oa.env = serialize_env();
 	exec_cmd = NULL;
 
-	while ((ch = getopt(argc, argv, "?a:c:D:d:e:hlpr:t:2" LAME_OPT)) != EOF) {
+	while ((ch = getopt(argc, argv, "?a:c:D:d:e:hlpr:Rt:2" LAME_OPT)) != EOF) {
 		char *e;
 
 		switch (ch) {
@@ -240,6 +241,9 @@ record_main(int argc, char **argv)
 				    optarg);
 				exit(EXIT_FAILURE);
 			}
+			break;
+		case 'R':
+			oa.use_raw = 1;
 			break;
 		case 't':
 			oa.title = escape(optarg);

@@ -40,7 +40,7 @@ installed to a location other than `/usr/local/`, you will have to edit the
 
 ## Usage
 
-    usage: castty [-acdelrt] [out.json]
+    usage: castty record [-acdelrt] [out.json]
      -a <outfile>   Output audio to <outfile>. Must be specified with -d.
      -c <cols>      Use <cols> columns in the recorded shell session.
      -D <outfile>   Send debugging information into <outfile>
@@ -49,17 +49,18 @@ installed to a location other than `/usr/local/`, you will have to edit the
      -l             List available audio input devices and exit.
      -m             Encode audio to mp3 before writing.
      -r <rows>      Use <rows> rows in the recorded shell session.
+     -R             Use a raw sound device.
      -t <title>     Title of the cast.
     
      [out.json]     Optional output filename of recorded events. If not specified,
                     a file "events.json" will be created.
 
-To list usable input devices for recording, just run `castty -l`. Output will
+To list usable input devices for recording, just run `castty record -l`. Output will
 look something like this:
 
     Available input devices:
        0: Built-in Microphone 44100Hz
-          castty -d 'AppleHDAEngineInput:1B,0,1,0:1' -a audio.f32le
+          castty -d 'AppleHDAEngineInput:1B,0,1,0:1' -a audio.raw
 
 The `-d 'AppleHDAEngineInput:1B,0,1,0:1'` argument can be pasted directly to
 CasTTY to choose that device for recording. The audio format and sample rate
