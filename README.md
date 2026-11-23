@@ -113,7 +113,7 @@ CasTTY player. Third-party dependencies are stored unmodified in `ui/vendor/`
 and bundled into `ui/css/min.css` and `ui/js/min.js` via `make -C ui` (using
 `make -C ui fetch-vendor` to re-fetch and verify upstream archives):
 
- * [jQuery](https://jquery.com/) (`3.1.1`)
+ * [jQuery](https://jquery.com/) (`3.7.1`)
  * [rangeslider.js](https://github.com/andreruffert/rangeslider.js) (`2.3.0`)
  * [xterm.js](https://github.com/sourcelair/xterm.js) (`2.4.0`)
 
