@@ -1,9 +1,9 @@
 # Bundle third-party vendor assets in ui/vendor/ into css/min.css and js/min.js.
 # CasTTY's own styles and code remain unminified in css/player.css and js/player.js.
 
-JQUERY_VER = 3.1.1
+JQUERY_VER = 3.7.1
 JQUERY_URL = https://registry.npmjs.org/jquery/-/jquery-$(JQUERY_VER).tgz
-JQUERY_SHA256 = 1edfdafd71f26e2730a2029f5c4971598f55f57627fd17c3410914aed2293821
+JQUERY_SHA256 = 68a9f787516da47c680e09c187bcbac4536b6f85d90eb882844e12919e583f53
 
 RANGESLIDER_VER = 2.3.0
 RANGESLIDER_URL = https://registry.npmjs.org/rangeslider.js/-/rangeslider.js-$(RANGESLIDER_VER).tgz
