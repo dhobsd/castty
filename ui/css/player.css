@@ -1,23 +1,64 @@
+:root {
+	--castty-accent: #00e676;
+	--castty-bar-bg: #141414;
+	--castty-bar-fg: #f5f5f5;
+	--castty-track-bg: #4a4a4a;
+}
+
 body {
 	margin: 8px;
 	-webkit-text-size-adjust: 100%;
 	text-size-adjust: 100%;
 }
 
-#controls {
+.castty-player {
+	margin: 0 auto;
+	max-width: 100%;
+	border-radius: 6px;
+	overflow: hidden;
 	background: #000;
+	box-shadow: 0 4px 16px rgba(0, 0, 0, 0.25);
+}
+
+.castty-player.castty-fullscreen,
+.castty-player:fullscreen {
+	position: fixed;
+	inset: 0;
+	z-index: 9999;
+	width: 100% !important;
+	height: 100%;
+	max-width: none;
+	border-radius: 0;
+	display: flex;
+	flex-direction: column;
+	justify-content: center;
+	align-items: center;
+	padding:
+		env(safe-area-inset-top, 0px)
+		env(safe-area-inset-right, 0px)
+		env(safe-area-inset-bottom, 0px)
+		env(safe-area-inset-left, 0px);
+	box-sizing: border-box;
+}
+
+#controls {
+	background: var(--castty-bar-bg);
+	color: var(--castty-bar-fg);
+	border-top: 1px solid rgba(255, 255, 255, 0.14);
 	display: flex;
 	align-items: center;
+	gap: 4px;
 	position: relative;
 	box-sizing: border-box;
-	min-height: 36px;
-	padding: 0 10px 0 2px;
+	min-height: 40px;
+	padding: 0 6px 0 4px;
 }
 
 #controls button {
-	color: #fff;
+	color: var(--castty-bar-fg);
 	background: none;
 	border: none;
+	border-radius: 4px;
 	font-size: 13pt;
 	height: 36px;
 	width: 36px;
@@ -25,10 +66,15 @@ body {
 	display: inline-flex;
 	align-items: center;
 	justify-content: center;
-	margin: 0 6px 0 0;
+	margin: 0;
 	padding: 0;
 	cursor: pointer;
 	touch-action: manipulation;
+	transition: background-color 120ms ease;
+}
+
+#controls button:hover {
+	background: rgba(255, 255, 255, 0.12);
 }
 
 #controls button:focus {
@@ -36,8 +82,32 @@ body {
 }
 
 #controls button:focus-visible {
-	outline: 2px solid #0f0;
+	outline: 2px solid var(--castty-accent);
 	outline-offset: -2px;
+}
+
+#controls .material-icons {
+	font-size: 20px;
+	line-height: 1;
+}
+
+.castty-time {
+	flex: 0 0 auto;
+	font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+	font-size: 12px;
+	line-height: 1;
+	font-variant-numeric: tabular-nums;
+	color: var(--castty-bar-fg);
+	padding: 0 4px;
+	white-space: nowrap;
+	user-select: none;
+}
+
+@media (max-width: 360px) {
+	.castty-time-sep,
+	.castty-time-total {
+		display: none;
+	}
 }
 
 /* Override stock rangeslider.css chrome with CasTTY's slim progress bar */
@@ -46,19 +116,54 @@ body {
 	box-shadow: none;
 }
 
+.rangeslider {
+	background: var(--castty-track-bg);
+}
+
+.rangeslider__fill {
+	background: var(--castty-accent);
+}
+
 .rangeslider__handle {
 	display: none;
 }
 
 .rangeslider--horizontal {
 	flex: 1 1 auto;
-	min-width: 0;
+	min-width: 48px;
 	width: auto;
 	height: 5px;
 	top: 0;
-	margin: 0;
+	margin: 0 4px;
 	touch-action: none;
 	cursor: pointer;
+}
+
+.rangeslider--horizontal .rangeslider__fill::after {
+	content: "";
+	position: absolute;
+	right: -5px;
+	top: 50%;
+	width: 11px;
+	height: 11px;
+	border-radius: 50%;
+	background: #fff;
+	box-shadow: 0 1px 3px rgba(0, 0, 0, 0.5);
+	transform: translateY(-50%) scale(0.75);
+	opacity: 0;
+	transition: opacity 120ms ease, transform 120ms ease;
+}
+
+#controls:hover .rangeslider--horizontal .rangeslider__fill::after,
+.rangeslider--horizontal.rangeslider--active .rangeslider__fill::after,
+input[type="range"]:focus-visible + .rangeslider--horizontal .rangeslider__fill::after {
+	opacity: 1;
+	transform: translateY(-50%) scale(1);
+}
+
+input[type="range"]:focus-visible + .rangeslider--horizontal {
+	outline: 2px solid var(--castty-accent);
+	outline-offset: 4px;
 }
 
 /* Expand vertical hit area so the slim bar is easy to click or drag */
@@ -84,6 +189,7 @@ body {
 @media (pointer: coarse) {
 	#controls {
 		min-height: 44px;
+		gap: 2px;
 	}
 
 	#controls button {
