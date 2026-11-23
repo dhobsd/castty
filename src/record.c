@@ -30,6 +30,62 @@ pid_t child;
 volatile sig_atomic_t ctrl_write_fd = -1;
 volatile sig_atomic_t sigchld_write_fd = -1;
 volatile sig_atomic_t tty_saved = 0;
+enum hud_mode rec_hud_mode = HUD_AUTO;
+int rec_req_rows, rec_req_cols;
+volatile sig_atomic_t hud_user_hidden = 0;
+static unsigned short last_out_rows, last_out_cols;
+static enum hud_mode last_hud_mode = HUD_OFF;
+
+void
+record_init_winsize_cache(int outer_rows, int outer_cols, enum hud_mode mode)
+{
+	last_out_rows = (unsigned short)outer_rows;
+	last_out_cols = (unsigned short)outer_cols;
+	last_hud_mode = mode;
+}
+
+void
+record_sync_winsize(int ctrl_fd, int always_send, enum control_command cmd)
+{
+	unsigned short minrow = MIN(rwin.ws_row, owin.ws_row);
+	unsigned short mincol = MIN(rwin.ws_col, owin.ws_col);
+	struct hud_layout nl;
+	int child_changed;
+
+	hud_compute_layout(rec_hud_mode, minrow, mincol, rec_req_rows,
+	    rec_req_cols, hud_user_hidden ? 1 : 0, &nl);
+
+	child_changed = (win.ws_row != (unsigned short)nl.child_rows ||
+	    win.ws_col != (unsigned short)nl.child_cols);
+
+	if (!always_send && !child_changed &&
+	    last_out_rows == minrow && last_out_cols == mincol &&
+	    last_hud_mode == nl.active_mode) {
+		return;
+	}
+
+	if (child_changed) {
+		win.ws_row = (unsigned short)nl.child_rows;
+		win.ws_col = (unsigned short)nl.child_cols;
+		(void)ioctl(masterfd, TIOCSWINSZ, &win);
+	}
+	last_out_rows = minrow;
+	last_out_cols = mincol;
+	last_hud_mode = nl.active_mode;
+
+	if (ctrl_fd != -1) {
+		struct control_msg msg = {
+			.cmd = cmd,
+			.rows = (unsigned short)nl.child_rows,
+			.cols = (unsigned short)nl.child_cols,
+			.outer_rows = (unsigned short)nl.outer_rows,
+			.outer_cols = (unsigned short)nl.outer_cols,
+			.hud_mode = nl.active_mode,
+		};
+		ssize_t wr = write(ctrl_fd, &msg, sizeof msg);
+		(void)wr;
+	}
+}
 
 void
 restore_tty(void)
@@ -151,7 +207,7 @@ static void
 usage(int status)
 {
 
-	fprintf(stderr, "usage: castty record [-123AacDdFehlmNprtR] [out.cast]\n"
+	fprintf(stderr, "usage: castty record [-123AacDdFHehlmNprtR] [out.cast]\n"
 	    " -1             Output asciicast v1 format.\n"
 	    " -2             Output asciicast v2 format.\n"
 	    " -3             Output asciicast v3 format (default).\n"
@@ -162,6 +218,7 @@ usage(int status)
 	    " -d <device>    Use audio device <device> for input.\n"
 	    " -e <cmd>       Execute <cmd> from the recorded shell session.\n"
 	    " -F <format>    Audio output format: raw, mp3, wav, flac, opus, ogg, m4a.\n"
+	    " -H <mode>      Recording HUD layout: auto, side, bottom, off.\n"
 	    " -h             Show this help.\n"
 	    " -l             List available audio input devices and exit.\n"
 	    " -m             Encode audio to mp3 before writing (shorthand for -F mp3).\n"
@@ -197,7 +254,7 @@ record_main(int argc, char **argv)
 	exec_cmd = NULL;
 	no_probe = 0;
 
-	while ((ch = getopt(argc, argv, "?Aa:c:D:d:e:F:hlmNpr:Rt:123")) != EOF) {
+	while ((ch = getopt(argc, argv, "?Aa:c:D:d:e:F:H:hlmNpr:Rt:123")) != EOF) {
 		char *e;
 
 		switch (ch) {
@@ -230,6 +287,14 @@ record_main(int argc, char **argv)
 			if (audio_set_format(optarg) != 0) {
 				fprintf(stderr,
 				    "castty: unsupported audio format: %s\n",
+				    optarg);
+				usage(EXIT_FAILURE);
+			}
+			break;
+		case 'H':
+			if (hud_parse_mode(optarg, &rec_hud_mode) != 0) {
+				fprintf(stderr,
+				    "castty: unsupported HUD mode: %s\n",
 				    optarg);
 				usage(EXIT_FAILURE);
 			}
@@ -354,16 +419,28 @@ record_main(int argc, char **argv)
 	term_reset_init(term, STDOUT_FILENO);
 	tty_saved = 1;
 
-	if (!oa.rows || oa.rows > win.ws_row) {
-		oa.rows = win.ws_row;
+	rec_req_rows = oa.rows;
+	rec_req_cols = oa.cols;
+	if (!isatty(STDOUT_FILENO)) {
+		rec_hud_mode = HUD_OFF;
 	}
 
-	if (!oa.cols || oa.cols > win.ws_col) {
-		oa.cols = win.ws_col;
-	}
+	{
+		struct hud_layout lay;
 
-	win.ws_row = oa.rows;
-	win.ws_col = oa.cols;
+		hud_compute_layout(rec_hud_mode, owin.ws_row, owin.ws_col,
+		    rec_req_rows, rec_req_cols, 0, &lay);
+		oa.outer_rows = lay.outer_rows;
+		oa.outer_cols = lay.outer_cols;
+		oa.rows = lay.child_rows;
+		oa.cols = lay.child_cols;
+		oa.hud_enabled = (rec_hud_mode != HUD_OFF);
+		oa.hud_mode = lay.active_mode;
+		win.ws_row = (unsigned short)lay.child_rows;
+		win.ws_col = (unsigned short)lay.child_cols;
+		record_init_winsize_cache(lay.outer_rows, lay.outer_cols,
+		    lay.active_mode);
+	}
 
 	set_raw_input();
 

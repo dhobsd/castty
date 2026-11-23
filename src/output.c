@@ -17,6 +17,8 @@
 #include "audio.h"
 #include "castty.h"
 #include "record.h"
+#include "tui/hud.h"
+#include "tui/screen.h"
 #include "utf8.h"
 
 static int audio_enabled, paused, start_paused;
@@ -28,6 +30,109 @@ static struct timeval prevtv, nowtv;
 static double aprev, anow, dur, pending_cast_offset_ms;
 static FILE *evout;
 static int master;
+static struct tui_vterm *vt_comp;
+static struct tui_surface *sf_comp;
+static struct hud_layout hud_lay;
+static struct hud_state hud_st;
+static int cast_child_cols, cast_child_rows;
+
+static double next_delta_ms(int start_audio);
+
+static void
+on_vt_reply(const char *bytes, size_t len, void *user)
+{
+	int *fdp = user;
+
+	if (fdp != NULL && *fdp >= 0 && len > 0) {
+		xwrite(*fdp, (void *)bytes, len);
+	}
+}
+
+static double
+live_elapsed_ms(void)
+{
+	if (paused || first) {
+		return dur;
+	}
+	if (audio_enabled) {
+		double d = audio_clock_ms() - aprev;
+
+		return dur + (d > 0.0 ? d : 0.0);
+	} else {
+		struct timeval tv;
+		double pms, nms;
+
+		gettimeofday(&tv, NULL);
+		pms = (double)(prevtv.tv_sec * 1000) +
+		    ((double)prevtv.tv_usec / 1000.);
+		nms = (double)(tv.tv_sec * 1000) + ((double)tv.tv_usec / 1000.);
+		return dur + ((nms > pms) ? (nms - pms) : 0.0);
+	}
+}
+
+static void
+render_compositor(int draw_hud)
+{
+	int cr = 0, cc = 0, cvis = 1, cshape = 0;
+	char title[256];
+
+	if (vt_comp == NULL || sf_comp == NULL) {
+		return;
+	}
+	(void)tui_vterm_take_dirty(vt_comp);
+	if (tui_vterm_take_title(vt_comp, title, sizeof title)) {
+		char osc[300];
+		int n = snprintf(osc, sizeof osc, "\x1b]0;%s\x07", title);
+
+		if (n > 0 && (size_t)n < sizeof osc) {
+			(void)tui_surface_write_raw(sf_comp, osc, (size_t)n);
+		}
+	}
+	tui_surface_begin(sf_comp);
+	tui_vterm_blit(vt_comp, sf_comp, 0, 0);
+	if (draw_hud && hud_lay.active_mode != HUD_OFF) {
+		hud_render(&hud_st, &hud_lay, sf_comp);
+	}
+	tui_vterm_get_cursor(vt_comp, &cr, &cc, &cvis, &cshape);
+	tui_surface_flush(sf_comp, cr, cc, cvis, cshape);
+}
+
+static void
+apply_compositor_layout(const struct control_msg *msg, int format_version)
+{
+	int dim_changed = (msg->cols != (unsigned short)cast_child_cols ||
+	    msg->rows != (unsigned short)cast_child_rows);
+
+	if (vt_comp != NULL) {
+		tui_vterm_resize(vt_comp, msg->rows, msg->cols);
+	}
+	if (sf_comp != NULL) {
+		if (msg->outer_rows != hud_lay.outer_rows ||
+		    msg->outer_cols != hud_lay.outer_cols) {
+			tui_surface_resize(sf_comp, msg->outer_rows,
+			    msg->outer_cols);
+		} else {
+			tui_surface_invalidate(sf_comp);
+		}
+	}
+
+	hud_compute_layout(msg->hud_mode, msg->outer_rows, msg->outer_cols,
+	    msg->rows, msg->cols, msg->hud_mode == HUD_OFF, &hud_lay);
+
+	if (dim_changed && !paused &&
+	    (format_version == 2 || format_version == 3)) {
+		double rdelta = next_delta_ms(1);
+		double rtime = (format_version == 3) ? rdelta : dur;
+
+		need_append_resize = 0;
+		fprintf(evout, "[%0.4f,\"r\",\"%hux%hu\"]\n",
+		    rtime / 1000, msg->cols, msg->rows);
+	}
+	if (dim_changed) {
+		cast_child_cols = msg->cols;
+		cast_child_rows = msg->rows;
+	}
+}
 
 static void
 sync_audio_clock(void)
@@ -109,6 +214,7 @@ handle_command(const struct control_msg *msg, int format_version)
 
 	case CMD_PAUSE:
 		paused = !paused;
+		hud_note_pause(&hud_st, paused);
 		if (!paused) {
 			/* Redraw screen */
 			xwrite(master, &c_l, 1);
@@ -127,14 +233,30 @@ handle_command(const struct control_msg *msg, int format_version)
 		}
 		break;
 
-	case CMD_RESIZE:
-		if (!paused && (format_version == 2 || format_version == 3)) {
-			double rdelta = next_delta_ms(1);
-			double rtime = (format_version == 3) ? rdelta : dur;
-			need_append_resize = 0;
-			fprintf(evout, "[%0.4f,\"r\",\"%hux%hu\"]\n",
-			    rtime / 1000, msg->cols, msg->rows);
+	case CMD_MARKER:
+		if (!paused) {
+			double mdelta = next_delta_ms(1);
+			double mtime = (format_version == 3) ? mdelta : dur;
+
+			if (format_version == 2 || format_version == 3) {
+				fprintf(evout, "[%0.4f,\"m\",\"\"]\n",
+				    mtime / 1000);
+			}
+			hud_note_marker(&hud_st, dur);
+		} else {
+			if (format_version == 2 || format_version == 3) {
+				double mtime = (format_version == 3) ? 0.0 : dur;
+
+				fprintf(evout, "[%0.4f,\"m\",\"\"]\n",
+				    mtime / 1000);
+			}
+			hud_note_marker(&hud_st, dur);
 		}
+		break;
+
+	case CMD_RESIZE:
+	case CMD_HUD_TOGGLE:
+		apply_compositor_layout(msg, format_version);
 		break;
 
 	default:
@@ -349,11 +471,29 @@ outputproc(struct outargs *oa)
 
 	xclose(STDIN_FILENO);
 
+	cast_child_cols = oa->cols;
+	cast_child_rows = oa->rows;
+	if (oa->hud_enabled) {
+		hud_compute_layout(oa->hud_mode, oa->outer_rows,
+		    oa->outer_cols, oa->rows, oa->cols,
+		    oa->hud_mode == HUD_OFF, &hud_lay);
+		vt_comp = tui_vterm_create(oa->rows, oa->cols, on_vt_reply,
+		    &master);
+		sf_comp = tui_surface_create(oa->outer_rows, oa->outer_cols,
+		    STDOUT_FILENO);
+		hud_init(&hud_st, oa->start_paused, appending, audio_enabled,
+		    audio_enabled ? audio_active_format_name() : "none",
+		    oa->append_info.existing_markers, dur);
+	}
+
 	/* Clear screen */
 	printf("\x1b[2J");
 
 	/* Move cursor to top-left */
 	printf("\x1b[H");
+	if (sf_comp != NULL) {
+		render_compositor(hud_lay.active_mode != HUD_OFF);
+	}
 
 	int f = fcntl(oa->masterfd, F_GETFL);
 	fcntl(oa->masterfd, F_SETFL, f | O_NONBLOCK);
@@ -370,10 +510,13 @@ outputproc(struct outargs *oa)
 	pollfds[1].events = POLLIN;
 	pollfds[1].revents = 0;
 
+	int burst = 0;
+
 	for (;;) {
 		int nready;
+		int timeout_ms = (hud_lay.active_mode != HUD_OFF) ? 50 : -1;
 
-		nready = poll(pollfds, 2, -1);
+		nready = poll(pollfds, 2, timeout_ms);
 		if (nready == -1 && errno == EINTR) {
 			continue;
 		} else if (nready == -1) {
@@ -382,7 +525,7 @@ outputproc(struct outargs *oa)
 			goto end;
 		}
 
-		for (int i = 0; i < 2; i++) {
+		for (int i = 0; i < 2 && nready > 0; i++) {
 			if (pollfds[i].revents & POLLIN) {
 				if (pollfds[i].fd == oa->controlfd) {
 					struct control_msg msg;
@@ -413,12 +556,21 @@ outputproc(struct outargs *oa)
 						goto end;
 					}
 
-					xwrite(STDOUT_FILENO, obuf, nread);
+					if (vt_comp != NULL) {
+						tui_vterm_feed(vt_comp,
+						    (const char *)obuf,
+						    (size_t)nread,
+						    STDOUT_FILENO);
+					} else {
+						xwrite(STDOUT_FILENO, obuf,
+						    nread);
+					}
 
 					if (!paused) {
+						hud_note_output(&hud_st);
 						handle_input(obuf, nread, oa->format_version);
 					}
-					if (nread == BUFSIZ) {
+					if (nread == BUFSIZ && ++burst < 8) {
 						continue;
 					}
 				}
@@ -430,9 +582,34 @@ outputproc(struct outargs *oa)
 				goto end;
 			}
 		}
+
+		burst = 0;
+		if (vt_comp != NULL && sf_comp != NULL) {
+			struct audio_vu vu;
+
+			if (hud_lay.active_mode != HUD_OFF) {
+				if (audio_enabled) {
+					audio_get_vu(&vu);
+				} else {
+					memset(&vu, 0, sizeof vu);
+				}
+				hud_tick(&hud_st, live_elapsed_ms(),
+				    audio_enabled ? &vu : NULL);
+			}
+			render_compositor(hud_lay.active_mode != HUD_OFF);
+		}
 	}
 
 end:
+	if (vt_comp != NULL && sf_comp != NULL) {
+		if (hud_lay.active_mode != HUD_OFF) {
+			render_compositor(0);
+		}
+		tui_vterm_destroy(vt_comp);
+		tui_surface_destroy(sf_comp);
+		vt_comp = NULL;
+		sf_comp = NULL;
+	}
 	if (oa->format_version == 3 && oa->shellpid > 0) {
 		int wstatus = 0;
 		pid_t r = 0;

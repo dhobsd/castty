@@ -28,8 +28,10 @@ but you will have to build it yourself.
 CasTTY also depends on [LAME](http://lame.sourceforge.net/) (`libmp3lame`) for
 on-the-fly MP3 encoding and decoding,
 [libsndfile](https://libsndfile.github.io/libsndfile/) for WAV, FLAC, Ogg Opus,
-and Ogg Vorbis audio support, and [FFmpeg](https://ffmpeg.org/) (`libavformat`,
-`libavcodec`, `libavutil`) for `.m4a` (AAC) encoding and decoding.
+and Ogg Vorbis audio support, [FFmpeg](https://ffmpeg.org/) (`libavformat`,
+`libavcodec`, `libavutil`) for `.m4a` (AAC) encoding and decoding, and
+[libvterm](https://www.leonerd.org.uk/code/libvterm/) for live terminal
+compositing in the recording HUD.
 
 There are no UI build dependencies because I find that idea a little silly.
 
@@ -41,7 +43,7 @@ installed to a location other than `/usr/local/`, you will have to edit the
 
 ## Usage
 
-    usage: castty record [-123AacDdFehlmNprtR] [out.cast]
+    usage: castty record [-123AacDdFHehlmNprtR] [out.cast]
      -1             Output asciicast v1 format.
      -2             Output asciicast v2 format.
      -3             Output asciicast v3 format (default).
@@ -52,6 +54,7 @@ installed to a location other than `/usr/local/`, you will have to edit the
      -d <device>    Use audio device <device> for input.
      -e <cmd>       Execute <cmd> from the recorded shell session.
      -F <format>    Audio output format: raw, mp3, wav, flac, opus, ogg, m4a.
+     -H <mode>      Recording HUD layout: auto, side, bottom, off.
      -h             Show this help.
      -l             List available audio input devices and exit.
      -m             Encode audio to mp3 before writing (shorthand for -F mp3).
@@ -101,6 +104,9 @@ Currently supported commands are:
  * `a`: Send a literal `^a` to the recorded session.
  * `m`: Mute or unmute the recording. Recording will continue, but without any
    audio until unmuted.
+ * `k`: Drop a timeline chapter marker (`"m"` event) at the current timestamp.
+ * `h`: Toggle the recording HUD (timer, timeline strip, markers, and live VU
+   meter) on or off when running interactively (`-H auto`/`side`/`bottom`).
  * `p`: Pause or unpause the recording. Neither terminal nor audio will be
    recorded during the paused period. When unpausing, CasTTY requests the
    screen to be redrawn. This may cause your terminal buffer to clear.
