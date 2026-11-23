@@ -1,10 +1,3 @@
-/* https://stackoverflow.com/questions/1582534/calculating-text-width/15302051#15302051 */
-$.fn.textWidth = function(text, font) {
-	if (!$.fn.textWidth.fakeEl) $.fn.textWidth.fakeEl = $('<span>').hide().appendTo(document.body);
-	$.fn.textWidth.fakeEl.text(text || this.val() || this.text()).css('font-family', font || this.css('font-family'));
-	return $.fn.textWidth.fakeEl.width();
-};
-
 /* https://stackoverflow.com/questions/3144711/find-the-time-left-in-a-settimeout/36389263#36389263 */
 var getTimeout = (function() {
 	var _setTimeout = setTimeout,
@@ -19,14 +12,14 @@ var getTimeout = (function() {
 	return function(id) {
 		var m = map[id];
 		return m ? Math.max(m[1] - Date.now() + m[0], 0) : NaN;
-	}
+	};
 })();
 
 var player = function(audioFile, containerElem, events) {
 	var Player = {};
-	
+
 	var init = function(audioFile, containerElem, events) {
-		Player.container = containerElem;
+		Player.container = $(containerElem);
 
 		Player.termContainer = $('<div id="term"></div>')
 		    .appendTo(Player.container);
@@ -36,17 +29,17 @@ var player = function(audioFile, containerElem, events) {
 
 		Player.term = new Terminal({
 			rows: events.height,
-			cols: events.width
+			cols: events.width,
+			fontFamily: 'courier-new, courier, monospace',
+			fontSize: 16,
+			cursorStyle: 'block'
 		});
 		Player.term.open(Player.termContainer[0]);
 
-		/* Apparently some browsers don't have String.repeat */
-		var s = "";
-		for (i = 0; i < events.width; i++) {
-			s += "m";
-		}
-		Player.termWidth = $(Player.termContainer).textWidth(s,
-		    'courier-new,courier,monospace') + 'px';
+		var screenEl = Player.term.element ?
+		    Player.term.element.querySelector('.xterm-screen') : null;
+		Player.termWidth = (screenEl ?
+		    Math.ceil(screenEl.getBoundingClientRect().width) : 0) + 'px';
 
 		Player.termContainer.css({
 		    margin: '0 auto',
@@ -56,6 +49,24 @@ var player = function(audioFile, containerElem, events) {
 		Player.controls.css({
 		    margin: '0 auto',
 		    width: Player.termWidth
+		});
+
+		/* Copy terminal selection to clipboard when mouse selection completes */
+		$(Player.termContainer).on('mouseup', function() {
+			if (!Player.term.hasSelection()) {
+				return;
+			}
+			var sel = Player.term.getSelection();
+			if (!sel) {
+				return;
+			}
+			if (navigator.clipboard && navigator.clipboard.writeText) {
+				navigator.clipboard.writeText(sel).catch(function() {});
+			} else if (document.execCommand) {
+				try {
+					document.execCommand('copy');
+				} catch (e) {}
+			}
 		});
 
 		Player.termEvents = events.stdout;
@@ -68,10 +79,11 @@ var player = function(audioFile, containerElem, events) {
 		Player.seekTo = function(t) {
 			var back = Player.eventOff &&
 			    Player.pos + Player.termEvents[Player.eventOff - 1][0] > (t / 1000);
+			var prefix = "";
 
 			if (back) {
-				Player.term.clear();
-				Player.term.reset();
+				/* Send RIS (ESC c) in-band so WriteBuffer resets in FIFO order */
+				prefix = "\x1bc";
 				Player.pos = 0;
 			}
 
@@ -85,7 +97,7 @@ var player = function(audioFile, containerElem, events) {
 
 			i = i == Player.termEvents.length ? i - 1 : i;
 
-			Player.term.write(str);
+			Player.term.write(prefix + str);
 			Player.eventOff = i;
 
 			return Player.termEvents[i][0] - t;
@@ -94,7 +106,7 @@ var player = function(audioFile, containerElem, events) {
 		Player.behind = function() {
 			return Player.pos + Player.termEvents[Player.eventOff][0] <
 			    Player.audio.currentTime;
-		}
+		};
 
 		Player.nextEvent = function() {
 			var str = "";
@@ -122,7 +134,7 @@ var player = function(audioFile, containerElem, events) {
 					    Player.termEvents[Player.eventOff][0] * 1000);
 				}
 			}
-		}
+		};
 
 		Player.seekPos = 0;
 		Player.updateSeeker = function() {
@@ -137,10 +149,10 @@ var player = function(audioFile, containerElem, events) {
 			Player.seekUpdate = 0;
 
 			Player.seekerHandle = setTimeout(Player.updateSeeker, 100);
-		}
+		};
 
 		if (audioFile) {
-			Player.toggle = $('<button id="playToggle" disabled><i class="material-icons">&#xE88B;</button>')
+			Player.toggle = $('<button id="playToggle" disabled><i class="material-icons">&#xE88B;</i></button>')
 			    .appendTo(Player.controls);
 		} else {
 			Player.toggle = $('<button id="playToggle"><i class="material-icons">&#xE037;</i></button>')
@@ -154,7 +166,7 @@ var player = function(audioFile, containerElem, events) {
 		Player.toggle.click(function() {
 			if (Player.startable) {
 				if (Player.ended) {
-					Player.term.clear();
+					Player.term.write("\x1bc");
 					Player.seekUpdate = 1;
 					Player.seeker.val(0).change();
 					Player.seekUpdate = 0;
@@ -276,24 +288,13 @@ var player = function(audioFile, containerElem, events) {
 				}
 				Player.toggle.prop('disabled', false);
 			});
+
 		}
 
 		Player.audio.load();
+
 		return Player;
-	}
-
-	$(document).mouseup(function() {
-		var sel = undefined;
-		if (document.selection && document.selection.type != "Control") {
-			sel = document.selection.createRange().text;
-		} else if (window.getSelection) {
-			sel = window.getSelection().toString();
-		}
-
-		if (sel && document.execCommand) {
-			document.execCommand('copy');
-		}
-	});
+	};
 
 	return init(audioFile, containerElem, events);
-}
+};
