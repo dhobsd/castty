@@ -323,6 +323,116 @@ class TestRecordingAndFormats(unittest.TestCase):
                 self.assertEqual(ulines[0]["version"], 3)
                 self.assertEqual(ulines[0]["term"]["cols"], 90)
 
+    def test_append_creates_and_extends_v1_v2_v3(self):
+        with tempfile.TemporaryDirectory(prefix="castty_app_") as d:
+            # -A on missing file creates a fresh v3 recording cleanly.
+            v3 = os.path.join(d, "app_v3.cast")
+            rc, _, _, err = run_in_pty(
+                ["record", "-N", "-A", "-e", "sh -c 'printf seg1'", v3],
+                rows=24, cols=80,
+            )
+            self.assertEqual(rc, 0, msg=err)
+            rc, _, _, err = run_in_pty(
+                ["record", "-N", "-A", "-e", "sh -c 'printf seg2'", v3],
+                rows=30, cols=100,
+            )
+            self.assertEqual(rc, 0, msg=err)
+            rc, _, _, err = run_in_pty(
+                ["record", "-N", "-A", "-e", "sh -c 'printf seg3'", v3],
+                rows=35, cols=120,
+            )
+            self.assertEqual(rc, 0, msg=err)
+            with open(v3, "r", encoding="utf-8") as f:
+                lines3 = [json.loads(line) for line in f]
+            self.assertEqual(lines3[0]["version"], 3)
+            self.assertEqual(lines3[0]["term"]["cols"], 80)
+            outs3 = "".join(ev[2] for ev in lines3[1:] if ev[1] == "o")
+            resizes3 = [ev[2] for ev in lines3[1:] if ev[1] == "r"]
+            self.assertIn("seg1", outs3)
+            self.assertIn("seg2", outs3)
+            self.assertIn("seg3", outs3)
+            self.assertEqual(resizes3, ["100x30", "120x35"])
+            self.assertEqual(len([ev for ev in lines3[1:] if ev[1] == "x"]), 3)
+
+            # Format mismatch or corrupt file must fail without modifying file.
+            with open(v3, "rb") as f:
+                before_bytes = f.read()
+            res = subprocess.run(
+                [CASTTY, "record", "-N", "-A", "-2", v3],
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+            )
+            self.assertNotEqual(res.returncode, 0)
+            with open(v3, "rb") as f:
+                self.assertEqual(f.read(), before_bytes)
+
+            bad = os.path.join(d, "bad.cast")
+            with open(bad, "wb") as f:
+                f.write(b"not a cast file")
+            res = subprocess.run(
+                [CASTTY, "record", "-N", "-A", bad],
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+            )
+            self.assertNotEqual(res.returncode, 0)
+            with open(bad, "rb") as f:
+                self.assertEqual(f.read(), b"not a cast file")
+
+            # v2 append preserves monotonic timestamps and emits resize.
+            v2 = os.path.join(d, "app_v2.cast")
+            rc, _, _, err = run_in_pty(
+                ["record", "-N", "-2", "-e", "sh -c 'printf v2a; sleep 0.08'", v2],
+                rows=24, cols=80,
+            )
+            self.assertEqual(rc, 0, msg=err)
+            rc, _, _, err = run_in_pty(
+                ["record", "-N", "-A", "-e", "sh -c 'printf v2b'", v2],
+                rows=32, cols=110,
+            )
+            self.assertEqual(rc, 0, msg=err)
+            with open(v2, "r", encoding="utf-8") as f:
+                lines2 = [json.loads(line) for line in f]
+            self.assertEqual(lines2[0]["version"], 2)
+            ts2 = [ev[0] for ev in lines2[1:]]
+            self.assertTrue(all(ts2[i] >= ts2[i - 1] for i in range(1, len(ts2))))
+            self.assertIn("110x32", [ev[2] for ev in lines2[1:] if ev[1] == "r"])
+            outs2 = "".join(ev[2] for ev in lines2[1:] if ev[1] == "o")
+            self.assertIn("v2a", outs2)
+            self.assertIn("v2b", outs2)
+
+            # v1 append (both castty-generated and external duration-first v1).
+            v1 = os.path.join(d, "app_v1.cast")
+            rc, _, _, err = run_in_pty(
+                ["record", "-N", "-1", "-e", "sh -c 'printf v1a; sleep 0.1'", v1],
+                rows=24, cols=80,
+            )
+            self.assertEqual(rc, 0, msg=err)
+            rc, _, _, err = run_in_pty(
+                ["record", "-N", "-A", "-e", "sh -c 'printf v1b'", v1],
+                rows=24, cols=80,
+            )
+            self.assertEqual(rc, 0, msg=err)
+            with open(v1, "r", encoding="utf-8") as f:
+                d1 = json.load(f)
+            self.assertEqual(d1["version"], 1)
+            outs1 = "".join(ev[1] for ev in d1["stdout"])
+            self.assertIn("v1a", outs1)
+            self.assertIn("v1b", outs1)
+            self.assertGreaterEqual(d1["duration"], 0.08)
+
+            v1_ext = os.path.join(d, "ext_v1.cast")
+            with open(v1_ext, "w", encoding="utf-8") as f:
+                f.write('{"duration": 0.4, "version": 1, "width": 80, "height": 24, "stdout": [[0.1, "ext1"]]}\n')
+            rc, _, _, err = run_in_pty(
+                ["record", "-N", "-A", "-e", "sh -c 'printf ext2'", v1_ext],
+                rows=24, cols=80,
+            )
+            self.assertEqual(rc, 0, msg=err)
+            with open(v1_ext, "r", encoding="utf-8") as f:
+                d1e = json.load(f)
+            outs1e = "".join(ev[1] for ev in d1e["stdout"])
+            self.assertIn("ext1", outs1e)
+            self.assertIn("ext2", outs1e)
+            self.assertGreaterEqual(d1e["duration"], 0.4)
+
 
 @unittest.skipUnless(HAS_LAME and HAS_FFMPEG, "requires WITH_LAME and ffmpeg/ffprobe")
 class TestLameDecoderVolumes(unittest.TestCase):
@@ -526,6 +636,142 @@ class TestAudioLoopback(unittest.TestCase):
         self.assertGreater(float(info.get("duration", 0)), 1.0)
         _, max_db = probe_volume(["-i", out_mp3])
         self.assertGreater(max_db, -15.0)
+
+    def _max_step_around(self, ffmpeg_input_args, center_sec):
+        cmd = (
+            ["ffmpeg", "-hide_banner", "-loglevel", "error"]
+            + ffmpeg_input_args
+            + ["-ss", f"{max(center_sec - 0.35, 0.0):.3f}", "-t", "0.70",
+               "-f", "f32le", "-ac", "1", "-"]
+        )
+        raw = subprocess.check_output(cmd)
+        samples = struct.unpack(f"<{len(raw) // 4}f", raw)
+        self.assertGreater(len(samples), 1000)
+        return max(abs(samples[i] - samples[i - 1]) for i in range(1, len(samples)))
+
+    def test_append_raw_pcm_seamless_and_synced(self):
+        out_raw = os.path.join(self.tmpdir.name, "append.raw")
+        cast_path = os.path.join(self.tmpdir.name, "append_raw.cast")
+        ff_fmt = ffmpeg_fmt_from_soundio(self.st_fmt)
+
+        play = subprocess.Popen(["paplay", "-d", "castty_t_lsink_st", self.tone_wav])
+        try:
+            time.sleep(0.2)
+            rc, _, _, err = run_in_pty([
+                "record", "-N", "-d", self.st_dev, "-a", out_raw,
+                "-e", "sh -c 'echo p1; sleep 1.2; echo p1done'", cast_path,
+            ])
+        finally:
+            play.wait()
+        self.assertEqual(rc, 0, msg=err)
+
+        with open(cast_path, "r", encoding="utf-8") as f:
+            dur1 = sum(max(ev[0], 0.0) for ev in (json.loads(l) for l in f.readlines()[1:]))
+
+        play = subprocess.Popen(["paplay", "-d", "castty_t_lsink_st", self.tone_wav])
+        try:
+            time.sleep(0.2)
+            rc, _, _, err = run_in_pty([
+                "record", "-N", "-A", "-d", self.st_dev, "-a", out_raw,
+                "-e", "sh -c 'echo p2; sleep 1.2; echo p2done'", cast_path,
+            ])
+        finally:
+            play.wait()
+        self.assertEqual(rc, 0, msg=err)
+        self.assertEqual(err, "")
+
+        # Verify both halves have strong signal, continuity (no pop), and synced cast duration.
+        mean1, _ = probe_volume([
+            "-f", ff_fmt, "-ar", str(self.st_rate), "-ac", "2",
+            "-t", "0.9", "-i", out_raw,
+        ])
+        mean2, _ = probe_volume([
+            "-f", ff_fmt, "-ar", str(self.st_rate), "-ac", "2",
+            "-ss", f"{dur1 + 0.25:.3f}", "-t", "0.8", "-i", out_raw,
+        ])
+        self.assertAlmostEqual(mean1, self.ref_mean, delta=2.5)
+        self.assertAlmostEqual(mean2, self.ref_mean, delta=2.5)
+
+        max_jump = self._max_step_around(
+            ["-f", ff_fmt, "-ar", str(self.st_rate), "-ac", "2", "-i", out_raw],
+            dur1,
+        )
+        self.assertLess(max_jump, 0.08, msg=f"Pop/step jump detected at raw splice: {max_jump}")
+
+    @unittest.skipUnless(HAS_LAME, "requires WITH_LAME")
+    def test_append_mp3_validation_and_stereo_plus_mono_splice(self):
+        # Invalid/non-MP3 file must fail cleanly without altering cast or audio.
+        bad_mp3 = os.path.join(self.tmpdir.name, "not_mp3.mp3")
+        bad_cast = os.path.join(self.tmpdir.name, "not_mp3.cast")
+        with open(bad_mp3, "wb") as f:
+            f.write(b"NOT_AN_MP3_FILE" * 64)
+        res = subprocess.run(
+            [CASTTY, "record", "-N", "-A", "-m", "-d", self.st_dev,
+             "-a", bad_mp3, bad_cast],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        )
+        self.assertNotEqual(res.returncode, 0)
+        self.assertFalse(os.path.exists(bad_cast))
+
+        # Session 1: stereo MP3 capture.
+        out_mp3 = os.path.join(self.tmpdir.name, "append.mp3")
+        cast_path = os.path.join(self.tmpdir.name, "append_mp3.cast")
+        play = subprocess.Popen(["paplay", "-d", "castty_t_lsink_st", self.tone_wav])
+        try:
+            time.sleep(0.2)
+            rc, _, _, err = run_in_pty([
+                "record", "-N", "-m", "-d", self.st_dev, "-a", out_mp3,
+                "-e", "sh -c 'echo s1; sleep 1.2; echo s1done'", cast_path,
+            ])
+        finally:
+            play.wait()
+        self.assertEqual(rc, 0, msg=err)
+        info1 = ffprobe_stream(out_mp3)
+        dur1 = float(info1["duration"])
+
+        # -A -p exiting without unpausing must leave existing MP3 intact.
+        size_before = os.path.getsize(out_mp3)
+        rc, _, _, err = run_in_pty([
+            "record", "-N", "-A", "-p", "-m", "-d", self.st_dev, "-a", out_mp3,
+            "-e", "printf noop", cast_path,
+        ])
+        self.assertEqual(rc, 0, msg=err)
+        self.assertEqual(os.path.getsize(out_mp3), size_before)
+
+        # Session 2: append using MONO mic onto existing STEREO MP3.
+        play = subprocess.Popen(["paplay", "-d", "castty_t_lsink_mo", self.tone_wav])
+        try:
+            time.sleep(0.2)
+            rc, _, _, err = run_in_pty([
+                "record", "-N", "-A", "-m", "-d", self.mo_dev, "-a", out_mp3,
+                "-e", "sh -c 'echo s2; sleep 1.2; echo s2done'", cast_path,
+            ])
+        finally:
+            play.wait()
+        self.assertEqual(rc, 0, msg=err)
+        self.assertEqual(err, "")
+
+        info2 = ffprobe_stream(out_mp3)
+        self.assertEqual(info2.get("codec_name"), "mp3")
+        self.assertEqual(info2.get("channels"), 2)
+        dur2 = float(info2["duration"])
+        self.assertGreater(dur2, dur1 + 0.9)
+
+        with open(cast_path, "r", encoding="utf-8") as f:
+            lines = [json.loads(l) for l in f]
+        cast_dur = sum(max(ev[0], 0.0) for ev in lines[1:])
+        outs = "".join(ev[2] for ev in lines[1:] if ev[1] == "o")
+        self.assertIn("s1", outs)
+        self.assertIn("s2", outs)
+        self.assertAlmostEqual(cast_dur, dur2, delta=0.25)
+
+        mean1, _ = probe_volume(["-t", f"{max(dur1 - 0.15, 0.5):.3f}", "-i", out_mp3])
+        mean2, _ = probe_volume(["-ss", f"{dur1 + 0.25:.3f}", "-t", "0.8", "-i", out_mp3])
+        self.assertAlmostEqual(mean1, self.ref_mean, delta=2.5)
+        self.assertAlmostEqual(mean2, self.ref_mean, delta=2.5)
+
+        max_jump = self._max_step_around(["-i", out_mp3], dur1)
+        self.assertLess(max_jump, 0.08, msg=f"Pop/step jump detected at MP3 splice: {max_jump}")
 
 
 if __name__ == "__main__":

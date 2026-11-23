@@ -9,7 +9,7 @@ CFLAGS = -O2 -I../include -std=c11 -MMD -MP $(WARNINGS)
 LDFLAGS = -O2 -L/usr/local/lib
 LDLIBS = -lsoundio -lpthread -lm
 
-TEST_OBJ := ../src/audio.o ../src/json.o ../src/xwrap.o ../src/audio/writer-raw.o
+TEST_OBJ := ../src/audio.o ../src/cast.o ../src/json.o ../src/xwrap.o ../src/audio/pcm.o ../src/audio/writer-raw.o
 ifneq ("$(WITH_LAME)", "no")
 	CPPFLAGS += -DWITH_LAME
 	LDLIBS += -lmp3lame

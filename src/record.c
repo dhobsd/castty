@@ -14,6 +14,7 @@
 
 #include "audio/writer-lame.h"
 #include "audio.h"
+#include "cast.h"
 #include "castty.h"
 #include "json.h"
 #include "record.h"
@@ -150,10 +151,11 @@ static void
 usage(int status)
 {
 
-	fprintf(stderr, "usage: castty record [-123acDdehlN" LAME_OPT "prt] [out.cast]\n"
+	fprintf(stderr, "usage: castty record [-123AacDdehlN" LAME_OPT "prt] [out.cast]\n"
 	    " -1             Output asciicast v1 format.\n"
 	    " -2             Output asciicast v2 format.\n"
 	    " -3             Output asciicast v3 format (default).\n"
+	    " -A             Append to an existing recording instead of overwriting.\n"
 	    " -a <outfile>   Output audio to <outfile>. Must be specified with -d.\n"
 	    " -c <cols>      Use <cols> columns in the recorded shell session.\n"
 	    " -D <outfile>   Send debugging information into <outfile>.\n"
@@ -196,10 +198,13 @@ record_main(int argc, char **argv)
 	exec_cmd = NULL;
 	no_probe = 0;
 
-	while ((ch = getopt(argc, argv, "?a:c:D:d:e:hlNpr:Rt:123" LAME_OPT)) != EOF) {
+	while ((ch = getopt(argc, argv, "?Aa:c:D:d:e:hlNpr:Rt:123" LAME_OPT)) != EOF) {
 		char *e;
 
 		switch (ch) {
+		case 'A':
+			oa.append = 1;
+			break;
 		case 'a':
 			oa.audioout = strdup(optarg);
 			break;
@@ -269,10 +274,6 @@ record_main(int argc, char **argv)
 		}
 	}
 
-	if (!oa.format_version) {
-		oa.format_version = 3;
-	}
-
 	if ((oa.audioout == NULL && oa.devid != NULL) ||
 	    (oa.devid == NULL && oa.audioout != NULL)) {
 		fprintf(stderr, "If -d or -a are specified, both must appear.\n");
@@ -286,6 +287,29 @@ record_main(int argc, char **argv)
 		oa.outfn = argv[0];
 	} else {
 		oa.outfn = "events.cast";
+	}
+
+	if (oa.append) {
+		char errbuf[256];
+
+		if (cast_inspect(oa.outfn, oa.format_version, &oa.append_info,
+		    errbuf, sizeof errbuf) != 0) {
+			fprintf(stderr, "%s\n", errbuf);
+			exit(EXIT_FAILURE);
+		}
+		if (oa.append_info.exists) {
+			oa.format_version = oa.append_info.version;
+		}
+		if (oa.audioout != NULL &&
+		    audio_check_append(oa.audioout, errbuf, sizeof errbuf) != 0) {
+			fprintf(stderr, "%s\n", errbuf);
+			cast_append_info_free(&oa.append_info);
+			exit(EXIT_FAILURE);
+		}
+	}
+
+	if (!oa.format_version) {
+		oa.format_version = 3;
 	}
 
 	if (pipe(controlfd) != 0) {
@@ -336,7 +360,8 @@ record_main(int argc, char **argv)
 
 	set_raw_input();
 
-	if (!no_probe && oa.format_version >= 2) {
+	if (!no_probe && oa.format_version >= 2 &&
+	    !(oa.append && oa.append_info.exists)) {
 		term_probe_tty(STDIN_FILENO, STDOUT_FILENO, term, &probe);
 		oa.term_version = probe.version;
 		oa.theme_json = probe.theme_json;
@@ -410,6 +435,7 @@ record_main(int argc, char **argv)
 
 	restore_tty();
 	term_probe_free(&probe);
+	cast_append_info_free(&oa.append_info);
 
 	return 0;
 }

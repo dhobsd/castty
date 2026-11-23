@@ -1,15 +1,22 @@
+#include <errno.h>
+#include <math.h>
 #include <stdatomic.h>
 #include <stdlib.h>
 #include <stdio.h>
 #include <stdint.h>
 #include <string.h>
+#include <sys/stat.h>
 
 #include <pthread.h>
 #include <unistd.h>
 
 #include <soundio/soundio.h>
+#ifdef WITH_LAME
+#include <lame/lame.h>
+#endif
 
 #include "castty.h"
+#include "audio/pcm.h"
 #include "audio/writer.h"
 #include "audio/writer-lame.h"
 #include "audio/writer-raw.h"
@@ -51,15 +58,26 @@ static int rates[] = {
 
 static struct audio_ctx {
 	const char *devid;
+	char *outpath;
+	char *tmp_path;
 	atomic_uint_fast64_t clock_frames;
 	double base_clock_ms;
+	double target_cast_ms;
 	atomic_int sample_rate;
 	enum SoundIoFormat format;
 	int bytes_per_sample;
 	int frame_bytes;
 	FILE *fout;
+	struct audio_writer *aw;
+	int aw_rate;
+	int fade_in_total;
+	int fade_in_pos;
 	int active;
 	int started;
+	int prepared;
+	int append;
+	int existing_stereo;
+	int pref_rate;
 	int connected;
 	int mono;
 	int use_raw;
@@ -104,27 +122,441 @@ audio_teardown_backend(void)
 	}
 }
 
+static void
+write_zero_frames(struct audio_writer *aw, enum SoundIoFormat fmt,
+    int frame_bytes, uint64_t nframes)
+{
+	enum {
+		ZERO_CHUNK_FRAMES = 4096,
+	};
+	unsigned char *zbuf;
+	size_t chunk_bytes = (size_t)ZERO_CHUNK_FRAMES * frame_bytes;
+
+	if (nframes == 0) {
+		return;
+	}
+	zbuf = calloc(1, chunk_bytes);
+	if (zbuf == NULL) {
+		perror("calloc");
+		exit(EXIT_FAILURE);
+	}
+	while (nframes > 0) {
+		uint64_t chunk = nframes > ZERO_CHUNK_FRAMES ?
+		    ZERO_CHUNK_FRAMES : nframes;
+
+		audio_writer_write(aw, fmt, (char *)zbuf,
+		    (int)(chunk * frame_bytes), frame_bytes);
+		nframes -= chunk;
+	}
+	free(zbuf);
+}
+
+#ifdef WITH_LAME
+static int
+probe_mp3_file(const char *path, int *rate_out, int *stereo_out, char *errbuf,
+    size_t errsz)
+{
+	FILE *fp;
+	hip_t hip;
+	unsigned char buf[4096];
+	short dl[1152], dr[1152];
+	mp3data_struct md;
+	size_t nr;
+	int enc_delay = -1, enc_padding = -1;
+	uint64_t frames = 0;
+
+	fp = fopen(path, "rb");
+	if (fp == NULL) {
+		snprintf(errbuf, errsz, "castty: cannot open %s: %s", path,
+		    strerror(errno));
+		return -1;
+	}
+	hip = hip_decode_init();
+	if (hip == NULL) {
+		snprintf(errbuf, errsz, "castty: hip_decode_init failed");
+		fclose(fp);
+		return -1;
+	}
+
+	memset(&md, 0, sizeof md);
+	while ((nr = fread(buf, 1, sizeof buf, fp)) > 0) {
+		const unsigned char *in = buf;
+		size_t inlen = nr;
+
+		for (;;) {
+			int n = hip_decode1_headersB(hip, (unsigned char *)in,
+			    inlen, dl, dr, &md, &enc_delay, &enc_padding);
+
+			in = buf;
+			inlen = 0;
+			if (n < 0) {
+				snprintf(errbuf, errsz,
+				    "castty: %s is not a valid MP3 file", path);
+				hip_decode_exit(hip);
+				fclose(fp);
+				return -1;
+			}
+			if (n == 0) {
+				break;
+			}
+			frames += (uint64_t)n;
+		}
+	}
+
+	for (;;) {
+		int n = hip_decode1_headersB(hip, buf, 0, dl, dr, &md,
+		    &enc_delay, &enc_padding);
+
+		if (n <= 0) {
+			break;
+		}
+		frames += (uint64_t)n;
+	}
+
+	hip_decode_exit(hip);
+	fclose(fp);
+
+	if (!md.header_parsed || md.samplerate <= 0 || md.stereo <= 0 ||
+	    frames == 0) {
+		snprintf(errbuf, errsz, "castty: %s contains no valid MP3 frames",
+		    path);
+		return -1;
+	}
+
+	if (rate_out) {
+		*rate_out = md.samplerate;
+	}
+	if (stereo_out) {
+		*stereo_out = (md.stereo >= 2);
+	}
+	return 0;
+}
+
+static uint64_t
+prepare_mp3_append(void)
+{
+	FILE *src_fp;
+	hip_t hip;
+	unsigned char buf[4096];
+	short dl[1152], dr[1152];
+	mp3data_struct md;
+	int enc_delay = -1, enc_padding = -1;
+	int src_rate = 0, src_ch = 0;
+	int dst_rate = ctx.stream->sample_rate;
+	int skip_head = 0, trim_tail_dst = 0;
+	int fade_dst = dst_rate / 100;
+	int hold_target = 0, hold_cap = 0, hold_len = 0;
+	float *hold = NULL;
+	int have_prev = 0;
+	float prev_l = 0.0f, prev_r = 0.0f;
+	double phase = 0.0, step = 1.0;
+	uint64_t pre_frames = 0;
+	size_t nr;
+	int tfd;
+	size_t tlen;
+
+	tlen = strlen(ctx.outpath) + sizeof(".castty.XXXXXX");
+	ctx.tmp_path = malloc(tlen);
+	if (ctx.tmp_path == NULL) {
+		perror("malloc");
+		exit(EXIT_FAILURE);
+	}
+	snprintf(ctx.tmp_path, tlen, "%s.castty.XXXXXX", ctx.outpath);
+	tfd = mkstemp(ctx.tmp_path);
+	if (tfd < 0) {
+		perror("mkstemp");
+		exit(EXIT_FAILURE);
+	}
+	ctx.fout = fdopen(tfd, "w+b");
+	if (ctx.fout == NULL) {
+		perror("fdopen");
+		close(tfd);
+		unlink(ctx.tmp_path);
+		exit(EXIT_FAILURE);
+	}
+
+	ctx.aw_rate = dst_rate;
+	ctx.aw = audio_writer_lame(ctx.fout, dst_rate, 2, BUF_TIME_S,
+	    ctx.mono && !ctx.existing_stereo);
+	if (ctx.aw == NULL) {
+		fprintf(stderr, "Couldn't create MP3 writer\n");
+		exit(EXIT_FAILURE);
+	}
+
+	src_fp = fopen(ctx.outpath, "rb");
+	if (src_fp == NULL) {
+		perror("fopen");
+		exit(EXIT_FAILURE);
+	}
+	hip = hip_decode_init();
+	if (hip == NULL) {
+		fprintf(stderr, "Couldn't initialize MP3 decoder\n");
+		exit(EXIT_FAILURE);
+	}
+
+	memset(&md, 0, sizeof md);
+	for (;;) {
+		int eof = 0;
+		const unsigned char *in;
+		size_t inlen;
+
+		nr = fread(buf, 1, sizeof buf, src_fp);
+		if (nr == 0) {
+			eof = 1;
+		}
+		in = buf;
+		inlen = nr;
+
+		for (;;) {
+			int n = hip_decode1_headersB(hip, (unsigned char *)in,
+			    inlen, dl, dr, &md, &enc_delay, &enc_padding);
+			int i;
+
+			in = buf;
+			inlen = 0;
+			if (n <= 0) {
+				break;
+			}
+			if (src_rate == 0 && md.header_parsed) {
+				int trim_src;
+
+				src_rate = md.samplerate;
+				src_ch = md.stereo;
+				step = (double)src_rate / (double)dst_rate;
+				skip_head = (enc_delay >= 0) ? (enc_delay + 528) : 0;
+				trim_src = (enc_delay >= 0 && enc_padding >= 528) ?
+				    (enc_padding - 528) : 0;
+				trim_tail_dst = (int)llround((double)trim_src *
+				    dst_rate / src_rate);
+				hold_target = trim_tail_dst + fade_dst;
+				hold_cap = hold_target + 4096;
+				hold = calloc((size_t)hold_cap * 2, sizeof *hold);
+				if (hold == NULL) {
+					perror("calloc");
+					exit(EXIT_FAILURE);
+				}
+			}
+			if (src_rate == 0) {
+				continue;
+			}
+
+			for (i = 0; i < n; i++) {
+				float sl, sr;
+
+				if (skip_head > 0) {
+					skip_head--;
+					continue;
+				}
+				sl = (float)dl[i] / 32768.0f;
+				sr = (src_ch > 1) ? ((float)dr[i] / 32768.0f) : sl;
+
+				if (src_rate == dst_rate) {
+					hold[(size_t)hold_len * 2] = sl;
+					hold[(size_t)hold_len * 2 + 1] = sr;
+					hold_len++;
+				} else if (!have_prev) {
+					prev_l = sl;
+					prev_r = sr;
+					have_prev = 1;
+					phase = 0.0;
+				} else {
+					while (phase < 1.0) {
+						double frac = phase;
+
+						hold[(size_t)hold_len * 2] =
+						    (float)(prev_l + frac * (sl - prev_l));
+						hold[(size_t)hold_len * 2 + 1] =
+						    (float)(prev_r + frac * (sr - prev_r));
+						hold_len++;
+						if (hold_len >= hold_cap) {
+							int flush_n = hold_len - hold_target;
+
+							audio_writer_write(ctx.aw,
+							    SoundIoFormatFloat32NE,
+							    (char *)hold,
+							    flush_n * 2 * (int)sizeof(float),
+							    2 * (int)sizeof(float));
+							pre_frames += (uint64_t)flush_n;
+							memmove(hold,
+							    hold + (size_t)flush_n * 2,
+							    (size_t)hold_target * 2 * sizeof *hold);
+							hold_len = hold_target;
+						}
+						phase += step;
+					}
+					phase -= 1.0;
+					prev_l = sl;
+					prev_r = sr;
+				}
+
+				if (hold_len >= hold_cap) {
+					int flush_n = hold_len - hold_target;
+
+					audio_writer_write(ctx.aw,
+					    SoundIoFormatFloat32NE,
+					    (char *)hold,
+					    flush_n * 2 * (int)sizeof(float),
+					    2 * (int)sizeof(float));
+					pre_frames += (uint64_t)flush_n;
+					memmove(hold,
+					    hold + (size_t)flush_n * 2,
+					    (size_t)hold_target * 2 * sizeof *hold);
+					hold_len = hold_target;
+				}
+			}
+		}
+
+		if (eof) {
+			break;
+		}
+	}
+
+	if (src_rate != dst_rate && have_prev && hold != NULL && hold_len < hold_cap) {
+		hold[(size_t)hold_len * 2] = prev_l;
+		hold[(size_t)hold_len * 2 + 1] = prev_r;
+		hold_len++;
+	}
+
+	if (hold != NULL && hold_len > 0) {
+		int trim = MIN(hold_len, trim_tail_dst);
+		int rem = hold_len - trim;
+		int fade_n = MIN(rem, fade_dst);
+		int unfaded = rem - fade_n;
+
+		if (unfaded > 0) {
+			audio_writer_write(ctx.aw, SoundIoFormatFloat32NE,
+			    (char *)hold,
+			    unfaded * 2 * (int)sizeof(float),
+			    2 * (int)sizeof(float));
+			pre_frames += (uint64_t)unfaded;
+		}
+		if (fade_n > 0) {
+			pcm_fade_frames(SoundIoFormatFloat32NE,
+			    (unsigned char *)(hold + (size_t)unfaded * 2),
+			    fade_n, 2, 2 * (int)sizeof(float),
+			    (int)sizeof(float), 0, fade_n, 1);
+			audio_writer_write(ctx.aw, SoundIoFormatFloat32NE,
+			    (char *)(hold + (size_t)unfaded * 2),
+			    fade_n * 2 * (int)sizeof(float),
+			    2 * (int)sizeof(float));
+			pre_frames += (uint64_t)fade_n;
+		}
+	}
+
+	free(hold);
+	hip_decode_exit(hip);
+	fclose(src_fp);
+
+	if (ctx.target_cast_ms > 0.0) {
+		double cur_ms = ((double)pre_frames * 1000.0) / (double)dst_rate;
+
+		if (cur_ms < ctx.target_cast_ms) {
+			uint64_t want = (uint64_t)llround(ctx.target_cast_ms *
+			    (double)dst_rate / 1000.0);
+
+			if (want > pre_frames) {
+				write_zero_frames(ctx.aw, SoundIoFormatFloat32NE,
+				    2 * (int)sizeof(float), want - pre_frames);
+				pre_frames = want;
+			}
+		}
+	}
+
+	return pre_frames;
+}
+#endif
+
+static uint64_t
+prepare_raw_append(void)
+{
+	off_t raw_sz, valid_bytes;
+	uint64_t frames;
+	int fade_frames = ctx.stream->sample_rate / 100;
+
+	ctx.fout = fopen(ctx.outpath, "r+b");
+	if (ctx.fout == NULL) {
+		perror("fopen");
+		exit(EXIT_FAILURE);
+	}
+	if (fseeko(ctx.fout, 0, SEEK_END) != 0 ||
+	    (raw_sz = ftello(ctx.fout)) < 0) {
+		perror("fseeko");
+		exit(EXIT_FAILURE);
+	}
+
+	valid_bytes = raw_sz - (raw_sz % ctx.frame_bytes);
+	if (valid_bytes != raw_sz) {
+		if (ftruncate(fileno(ctx.fout), valid_bytes) != 0) {
+			perror("ftruncate");
+			exit(EXIT_FAILURE);
+		}
+	}
+
+	frames = (uint64_t)(valid_bytes / ctx.frame_bytes);
+	if (frames > 0 && fade_frames > 0) {
+		int tail_n = (frames < (uint64_t)fade_frames) ?
+		    (int)frames : fade_frames;
+		off_t tail_off = (off_t)(frames - (uint64_t)tail_n) *
+		    ctx.frame_bytes;
+		size_t tail_bytes = (size_t)tail_n * ctx.frame_bytes;
+		unsigned char *tbuf = malloc(tail_bytes);
+
+		if (tbuf == NULL) {
+			perror("malloc");
+			exit(EXIT_FAILURE);
+		}
+		if (fseeko(ctx.fout, tail_off, SEEK_SET) != 0 ||
+		    fread(tbuf, 1, tail_bytes, ctx.fout) != tail_bytes) {
+			perror("fread");
+			free(tbuf);
+			exit(EXIT_FAILURE);
+		}
+		pcm_fade_frames(ctx.format, tbuf, tail_n, 2, ctx.frame_bytes,
+		    ctx.bytes_per_sample, 0, tail_n, 1);
+		if (fseeko(ctx.fout, tail_off, SEEK_SET) != 0 ||
+		    fwrite(tbuf, 1, tail_bytes, ctx.fout) != tail_bytes) {
+			perror("fwrite");
+			free(tbuf);
+			exit(EXIT_FAILURE);
+		}
+		free(tbuf);
+	}
+
+	if (fseeko(ctx.fout, valid_bytes, SEEK_SET) != 0) {
+		perror("fseeko");
+		exit(EXIT_FAILURE);
+	}
+
+	ctx.aw_rate = ctx.stream->sample_rate;
+	ctx.aw = audio_writer_raw(ctx.fout);
+	if (ctx.aw == NULL) {
+		fprintf(stderr, "Couldn't create raw writer\n");
+		exit(EXIT_FAILURE);
+	}
+
+	if (ctx.target_cast_ms > 0.0) {
+		double cur_ms = ((double)frames * 1000.0) /
+		    (double)ctx.stream->sample_rate;
+
+		if (cur_ms < ctx.target_cast_ms) {
+			uint64_t want = (uint64_t)llround(ctx.target_cast_ms *
+			    (double)ctx.stream->sample_rate / 1000.0);
+
+			if (want > frames) {
+				write_zero_frames(ctx.aw, ctx.format,
+				    ctx.frame_bytes, want - frames);
+				frames = want;
+			}
+		}
+	}
+
+	return frames;
+}
+
 static void *
 writer(void *priv)
 {
-	struct audio_writer *aw;
-	int sample_rate;
-
 	(void)priv;
-
-	sample_rate = atomic_load_explicit(&ctx.sample_rate, memory_order_acquire);
-	(void)sample_rate;
-	if (mp3) {
-		aw = audio_writer_lame(ctx.fout, sample_rate, 2,
-		    BUF_TIME_S, ctx.mono);
-	} else {
-		aw = audio_writer_raw(ctx.fout);
-	}
-
-	if (aw == NULL) {
-		fprintf(stderr, "castty was not compiled with support for the selected format\n");
-		exit(EXIT_FAILURE);
-	}
 
 	for (;;) {
 		int stop_now = atomic_load_explicit(&stopping, memory_order_acquire);
@@ -143,7 +575,18 @@ writer(void *priv)
 			char *read_buf = soundio_ring_buffer_read_ptr(ctx.rb);
 
 			if (atomic_load_explicit(&recording, memory_order_acquire)) {
-				audio_writer_write(aw, ctx.format, read_buf,
+				if (ctx.fade_in_pos < ctx.fade_in_total) {
+					int nframes = fill_bytes / ctx.frame_bytes;
+					int fade_n = MIN(nframes,
+					    ctx.fade_in_total - ctx.fade_in_pos);
+
+					pcm_fade_frames(ctx.format,
+					    (unsigned char *)read_buf, fade_n, 2,
+					    ctx.frame_bytes, ctx.bytes_per_sample,
+					    ctx.fade_in_pos, ctx.fade_in_total, 0);
+					ctx.fade_in_pos += fade_n;
+				}
+				audio_writer_write(ctx.aw, ctx.format, read_buf,
 				    fill_bytes, ctx.frame_bytes);
 			}
 			soundio_ring_buffer_advance_read_ptr(ctx.rb, fill_bytes);
@@ -157,7 +600,6 @@ writer(void *priv)
 		usleep(1000);
 	}
 
-	audio_writer_destroy(aw);
 	fflush(ctx.fout);
 
 	return NULL;
@@ -385,22 +827,29 @@ audio_start(void)
 		}
 	}
 
-	for (unsigned i = 0; i < sizeof rates / sizeof rates[0]; i++) {
-		if (rates[i] == 0) {
-			if (ctx.dev->sample_rate_current > 0 &&
-			    soundio_device_supports_sample_rate(ctx.dev,
-			    ctx.dev->sample_rate_current)) {
-				ctx.stream->sample_rate = ctx.dev->sample_rate_current;
+	int target_rate = ctx.aw_rate > 0 ? ctx.aw_rate : ctx.pref_rate;
+
+	if (target_rate > 0 &&
+	    soundio_device_supports_sample_rate(ctx.dev, target_rate)) {
+		ctx.stream->sample_rate = target_rate;
+	} else {
+		for (unsigned i = 0; i < sizeof rates / sizeof rates[0]; i++) {
+			if (rates[i] == 0) {
+				if (ctx.dev->sample_rate_current > 0 &&
+				    soundio_device_supports_sample_rate(ctx.dev,
+				    ctx.dev->sample_rate_current)) {
+					ctx.stream->sample_rate = ctx.dev->sample_rate_current;
+					break;
+				}
+				fprintf(stderr, "Input device supports no usable rates\n");
+				audio_teardown_backend();
+				exit(EXIT_FAILURE);
+			}
+
+			if (soundio_device_supports_sample_rate(ctx.dev, rates[i])) {
+				ctx.stream->sample_rate = rates[i];
 				break;
 			}
-			fprintf(stderr, "Input device supports no usable rates\n");
-			audio_teardown_backend();
-			exit(EXIT_FAILURE);
-		}
-
-		if (soundio_device_supports_sample_rate(ctx.dev, rates[i])) {
-			ctx.stream->sample_rate = rates[i];
-			break;
 		}
 	}
 
@@ -432,6 +881,53 @@ audio_start(void)
 		exit(EXIT_FAILURE);
 	}
 
+	if (!ctx.prepared) {
+		struct stat st;
+		uint64_t pre_frames = 0;
+
+		if (ctx.append && stat(ctx.outpath, &st) == 0 && st.st_size > 0) {
+			if (mp3) {
+#ifdef WITH_LAME
+				pre_frames = prepare_mp3_append();
+#else
+				fprintf(stderr,
+				    "castty was not compiled with MP3 support\n");
+				exit(EXIT_FAILURE);
+#endif
+			} else {
+				pre_frames = prepare_raw_append();
+			}
+			ctx.base_clock_ms = ((double)pre_frames * 1000.0) /
+			    (double)ctx.stream->sample_rate;
+		} else {
+			if (ctx.fout == NULL) {
+				ctx.fout = xfopen(ctx.outpath, "w+b");
+			}
+			ctx.aw_rate = ctx.stream->sample_rate;
+			ctx.aw = mp3 ? audio_writer_lame(ctx.fout, ctx.aw_rate, 2,
+			    BUF_TIME_S, ctx.mono) : audio_writer_raw(ctx.fout);
+			if (ctx.aw == NULL) {
+				fprintf(stderr,
+				    "castty was not compiled with support for the selected format\n");
+				exit(EXIT_FAILURE);
+			}
+			if (ctx.append && ctx.target_cast_ms > 0.0) {
+				pre_frames = (uint64_t)llround(ctx.target_cast_ms *
+				    (double)ctx.aw_rate / 1000.0);
+				if (pre_frames > 0) {
+					write_zero_frames(ctx.aw, ctx.format,
+					    ctx.frame_bytes, pre_frames);
+					ctx.base_clock_ms = ((double)pre_frames * 1000.0) /
+					    (double)ctx.aw_rate;
+				}
+			}
+		}
+		ctx.prepared = 1;
+	}
+
+	ctx.fade_in_total = ctx.stream->sample_rate / 100;
+	ctx.fade_in_pos = 0;
+
 	atomic_store_explicit(&stopping, 0, memory_order_release);
 	atomic_store_explicit(&recording, 1, memory_order_release);
 
@@ -447,26 +943,108 @@ audio_start(void)
 		perror("pthread_create");
 		atomic_store_explicit(&recording, 0, memory_order_release);
 		audio_teardown_backend();
-		xfclose(ctx.fout);
-		ctx.fout = NULL;
+		if (ctx.fout) {
+			xfclose(ctx.fout);
+			ctx.fout = NULL;
+		}
+		if (ctx.tmp_path) {
+			unlink(ctx.tmp_path);
+		}
 		exit(EXIT_FAILURE);
 	}
 
 	ctx.started = 1;
 }
 
+int
+audio_check_append(const char *outfile, char *errbuf, size_t errsz)
+{
+	struct stat st;
+
+	if (outfile == NULL) {
+		return 0;
+	}
+	if (stat(outfile, &st) != 0) {
+		if (errno == ENOENT) {
+			return 0;
+		}
+		snprintf(errbuf, errsz, "castty: cannot access %s: %s",
+		    outfile, strerror(errno));
+		return -1;
+	}
+	if (st.st_size == 0) {
+		return 0;
+	}
+	if (mp3) {
+#ifdef WITH_LAME
+		int rate = 0, stereo = 0;
+
+		if (probe_mp3_file(outfile, &rate, &stereo, errbuf, errsz) != 0) {
+			return -1;
+		}
+		ctx.pref_rate = rate;
+		ctx.existing_stereo = stereo;
+		return 0;
+#else
+		snprintf(errbuf, errsz,
+		    "castty was not compiled with MP3 support");
+		return -1;
+#endif
+	} else {
+		FILE *fp = fopen(outfile, "r+b");
+
+		if (fp == NULL) {
+			snprintf(errbuf, errsz,
+			    "castty: cannot open %s for append: %s",
+			    outfile, strerror(errno));
+			return -1;
+		}
+		fclose(fp);
+		return 0;
+	}
+}
+
 void
-audio_init(const char *devid, const char *outfile, int use_raw)
+audio_init_append(const char *devid, const char *outfile, int use_raw,
+    int append, double target_cast_ms)
 {
 
 	ctx.active = 1;
 	ctx.started = 0;
+	ctx.prepared = 0;
+	ctx.append = append;
+	ctx.target_cast_ms = target_cast_ms;
 	ctx.base_clock_ms = 0.0;
+	ctx.aw = NULL;
+	ctx.aw_rate = 0;
+	ctx.fade_in_total = 0;
+	ctx.fade_in_pos = 0;
 	atomic_init(&ctx.clock_frames, 0);
 	atomic_init(&ctx.sample_rate, 0);
-	ctx.fout = xfopen(outfile, "wb");
+	free(ctx.outpath);
+	ctx.outpath = strdup(outfile);
+	if (ctx.outpath == NULL) {
+		perror("strdup");
+		exit(EXIT_FAILURE);
+	}
+	free(ctx.tmp_path);
+	ctx.tmp_path = NULL;
+	if (!append) {
+		ctx.pref_rate = 0;
+		ctx.existing_stereo = 0;
+		ctx.fout = xfopen(outfile, "w+b");
+	} else {
+		ctx.fout = NULL;
+	}
 	ctx.devid = devid;
 	ctx.use_raw = use_raw;
+}
+
+void
+audio_init(const char *devid, const char *outfile, int use_raw)
+{
+
+	audio_init_append(devid, outfile, use_raw, 0, 0.0);
 }
 
 void
@@ -508,10 +1086,31 @@ audio_exit(void)
 	}
 	ctx.active = 0;
 
+	if (ctx.aw) {
+		audio_writer_destroy(ctx.aw);
+		ctx.aw = NULL;
+	}
+
 	if (ctx.fout) {
 		xfclose(ctx.fout);
 		ctx.fout = NULL;
 	}
+
+	if (ctx.tmp_path) {
+		if (ctx.prepared) {
+			if (rename(ctx.tmp_path, ctx.outpath) != 0) {
+				perror("rename");
+				exit(EXIT_FAILURE);
+			}
+		} else {
+			unlink(ctx.tmp_path);
+		}
+		free(ctx.tmp_path);
+		ctx.tmp_path = NULL;
+	}
+
+	free(ctx.outpath);
+	ctx.outpath = NULL;
 }
 
 void
