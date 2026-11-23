@@ -26,6 +26,12 @@ static double aprev, anow, dur;
 static FILE *evout;
 static int master;
 
+/*
+ * Always drive timing from the audio sample clock when recording audio so
+ * terminal events stay locked to the audio track without drift. Muting (^a m)
+ * still records zeroed silence frames and keeps advancing audio_clock_ms(),
+ * so we never switch clocks mid-recording.
+ */
 static double
 next_delta_ms(int start_audio)
 {

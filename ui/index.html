@@ -21,7 +21,10 @@
 				console.log(XMLHttpRequest.responseText);
 			}});
 
-			$.getJSON('events.json', {}, function (data) {
+			$.ajax({
+				url: 'events.cast',
+				dataType: 'text'
+			}).done(function (data) {
 				var p = player("audio2.mp3", $("#container"), data);
 			});
 		</script>
