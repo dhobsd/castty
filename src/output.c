@@ -238,8 +238,7 @@ outputproc(struct outargs *oa)
 		fprintf(evout, "}\n");
 	} else {
 		fprintf(evout,
-		    "{                        " // have room to write duration later
-		    "\"version\": %d, "
+		    "{\"version\": %d, "
 		    "\"width\": %d, "
 		    "\"height\": %d, "
 		    "\"command\": \"%s\", "
@@ -371,15 +370,15 @@ end:
 			fprintf(evout, "[%0.4f,\"x\",\"%d\"]\n",
 			    xdelta / 1000, code);
 		}
+	} else if ((oa->format_version == 1 || oa->format_version == 2) &&
+	    !first && !paused) {
+		double edelta = next_delta_ms(0);
+		if (oa->format_version == 2 && edelta >= 1.0) {
+			fprintf(evout, "[%0.4f,\"o\",\"\"]\n", dur / 1000);
+		}
 	}
 	if (oa->format_version == 1) {
-		// closes stdout segment
-		fprintf(evout, "]}\n");
-	}
-	if (oa->format_version == 1 || oa->format_version == 2) {
-		// seeks to header, overwriting spaces with duration
-		fseek(evout, 1L, SEEK_SET);
-		fprintf(evout, "\"duration\": %.9g, ", dur / 1000);
+		fprintf(evout, "], \"duration\": %.9g}\n", dur / 1000);
 	}
 
 	fflush(evout);
