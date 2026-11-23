@@ -11,6 +11,7 @@ enum audio_format {
 	AUDIO_FMT_FLAC,
 	AUDIO_FMT_OPUS,
 	AUDIO_FMT_OGG,
+	AUDIO_FMT_M4A,
 };
 
 double audio_clock_ms(void);

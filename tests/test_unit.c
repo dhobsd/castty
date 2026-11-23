@@ -13,6 +13,7 @@
 #include "audio/pcm.h"
 #include "audio/writer.h"
 #include "audio/writer-lame.h"
+#include "audio/writer-m4a.h"
 #include "audio/writer-raw.h"
 #include "audio/writer-sndfile.h"
 #include "cast.h"
@@ -576,6 +577,74 @@ test_writer_sndfile(void)
 	}
 }
 
+struct m4a_test_state {
+	int frames;
+	int rate;
+	double sq;
+};
+
+static void
+m4a_test_cb(void *userdata, int src_rate, float sl, float sr)
+{
+	struct m4a_test_state *st = userdata;
+
+	st->rate = src_rate;
+	st->sq += (double)sl * (double)sl + (double)sr * (double)sr;
+	st->frames++;
+}
+
+static void
+test_writer_m4a(void)
+{
+	char bad_path[] = "/tmp/castty_bad_m4a_XXXXXX";
+	char errbuf[256];
+	int bad_fd, mono;
+
+	assert(audio_set_format("m4a") == 0);
+	assert(audio_set_format("M4A") == 0);
+	assert(audio_set_format("auto") == 0);
+
+	bad_fd = mkstemp(bad_path);
+	assert(bad_fd >= 0);
+	assert(write(bad_fd, "not an m4a\n", 11) == 11);
+	close(bad_fd);
+	assert(audio_m4a_probe(bad_path, NULL, NULL, errbuf,
+	    sizeof errbuf) != 0);
+	unlink(bad_path);
+
+	for (mono = 0; mono <= 1; mono++) {
+		char path[] = "/tmp/castty_m4a_XXXXXX";
+		int fd = mkstemp(path);
+		FILE *fp;
+		struct audio_writer *aw;
+		struct m4a_test_state st;
+		int rate = 0, stereo = -1;
+
+		assert(fd >= 0);
+		fp = fdopen(fd, "w+b");
+		assert(fp != NULL);
+
+		aw = audio_writer_m4a(fp, 48000, 2, mono);
+		write_writer_tone(aw, SoundIoFormatFloat32LE, 4, 2, 48000,
+		    24000);
+		fclose(fp);
+
+		assert(audio_m4a_probe(path, &rate, &stereo, errbuf,
+		    sizeof errbuf) == 0);
+		assert(rate == 48000);
+		assert(stereo == !mono);
+
+		memset(&st, 0, sizeof st);
+		assert(audio_m4a_decode(path, m4a_test_cb, &st, errbuf,
+		    sizeof errbuf) == 0);
+		assert(st.rate == 48000);
+		assert(st.frames > 20000);
+		assert(sqrt(st.sq / (double)(st.frames * 2)) > 0.20);
+
+		unlink(path);
+	}
+}
+
 int
 main(int argc, char **argv)
 {
@@ -590,6 +659,7 @@ main(int argc, char **argv)
 	test_cast_inspect();
 	test_writer_lame();
 	test_writer_sndfile();
+	test_writer_m4a();
 
 	printf("C unit tests passed\n");
 	return 0;

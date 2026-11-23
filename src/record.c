@@ -161,7 +161,7 @@ usage(int status)
 	    " -D <outfile>   Send debugging information into <outfile>.\n"
 	    " -d <device>    Use audio device <device> for input.\n"
 	    " -e <cmd>       Execute <cmd> from the recorded shell session.\n"
-	    " -F <format>    Audio output format: raw, mp3, wav, flac, opus, ogg.\n"
+	    " -F <format>    Audio output format: raw, mp3, wav, flac, opus, ogg, m4a.\n"
 	    " -h             Show this help.\n"
 	    " -l             List available audio input devices and exit.\n"
 	    " -m             Encode audio to mp3 before writing (shorthand for -F mp3).\n"

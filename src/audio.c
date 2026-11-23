@@ -20,6 +20,7 @@
 #include "audio/pcm.h"
 #include "audio/writer.h"
 #include "audio/writer-lame.h"
+#include "audio/writer-m4a.h"
 #include "audio/writer-raw.h"
 #include "audio/writer-sndfile.h"
 
@@ -131,6 +132,7 @@ static const struct {
 	{ AUDIO_FMT_FLAC, "flac", ".flac" },
 	{ AUDIO_FMT_OPUS, "opus", ".opus" },
 	{ AUDIO_FMT_OGG,  "ogg",  ".ogg"  },
+	{ AUDIO_FMT_M4A,  "m4a",  ".m4a"  },
 };
 
 static const char *
@@ -186,6 +188,8 @@ create_audio_writer(FILE *fout, enum audio_format afmt, int rate, int mono)
 	case AUDIO_FMT_OGG:
 		return audio_writer_sndfile(fout, afmt, rate, 2, BUF_TIME_S,
 		    mono);
+	case AUDIO_FMT_M4A:
+		return audio_writer_m4a(fout, rate, 2, mono);
 	case AUDIO_FMT_AUTO:
 		break;
 	}
@@ -725,6 +729,42 @@ prepare_sndfile_append(void)
 	return append_splice_finish(&sp);
 }
 
+struct m4a_decode_ctx {
+	struct append_splice sp;
+	int initialized;
+};
+
+static void
+m4a_decode_cb(void *userdata, int src_rate, float sl, float sr)
+{
+	struct m4a_decode_ctx *dc = userdata;
+
+	if (!dc->initialized) {
+		append_splice_init(&dc->sp, src_rate, ctx.stream->sample_rate,
+		    0);
+		dc->initialized = 1;
+	}
+	append_splice_push(&dc->sp, sl, sr);
+}
+
+static uint64_t
+prepare_m4a_append(void)
+{
+	struct m4a_decode_ctx dc;
+	char errbuf[256];
+
+	open_append_temp_writer();
+	memset(&dc, 0, sizeof dc);
+	dc.sp.dst_rate = ctx.stream->sample_rate;
+
+	if (audio_m4a_decode(ctx.outpath, m4a_decode_cb, &dc, errbuf,
+	    sizeof errbuf) != 0) {
+		fprintf(stderr, "%s\n", errbuf);
+		exit(EXIT_FAILURE);
+	}
+	return append_splice_finish(&dc.sp);
+}
+
 static uint64_t
 prepare_raw_append(void)
 {
@@ -1136,6 +1176,8 @@ audio_start(void)
 		if (ctx.append && stat(ctx.outpath, &st) == 0 && st.st_size > 0) {
 			if (ctx.afmt == AUDIO_FMT_MP3) {
 				pre_frames = prepare_mp3_append();
+			} else if (ctx.afmt == AUDIO_FMT_M4A) {
+				pre_frames = prepare_m4a_append();
 			} else if (audio_sndfile_format(ctx.afmt) != 0) {
 				pre_frames = prepare_sndfile_append();
 			} else {
@@ -1221,20 +1263,21 @@ audio_check_append(const char *outfile, char *errbuf, size_t errsz)
 	if (st.st_size == 0) {
 		return 0;
 	}
-	if (afmt == AUDIO_FMT_MP3) {
-		int rate = 0, stereo = 0;
+	if (afmt == AUDIO_FMT_MP3 || afmt == AUDIO_FMT_M4A ||
+	    audio_sndfile_format(afmt) != 0) {
+		int rate = 0, stereo = 0, rc;
 
-		if (probe_mp3_file(outfile, &rate, &stereo, errbuf, errsz) != 0) {
-			return -1;
+		if (afmt == AUDIO_FMT_MP3) {
+			rc = probe_mp3_file(outfile, &rate, &stereo, errbuf,
+			    errsz);
+		} else if (afmt == AUDIO_FMT_M4A) {
+			rc = audio_m4a_probe(outfile, &rate, &stereo, errbuf,
+			    errsz);
+		} else {
+			rc = probe_sndfile_file(outfile, afmt, &rate, &stereo,
+			    errbuf, errsz);
 		}
-		ctx.pref_rate = rate;
-		ctx.existing_stereo = stereo;
-		return 0;
-	} else if (audio_sndfile_format(afmt) != 0) {
-		int rate = 0, stereo = 0;
-
-		if (probe_sndfile_file(outfile, afmt, &rate, &stereo, errbuf,
-		    errsz) != 0) {
+		if (rc != 0) {
 			return -1;
 		}
 		ctx.pref_rate = rate;

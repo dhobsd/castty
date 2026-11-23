@@ -770,8 +770,10 @@ class TestAudioLoopback(unittest.TestCase):
             ("flac", "flac", None, []),
             ("opus", "opus", "48000", []),
             ("ogg", "vorbis", None, []),
+            ("m4a", "aac", None, []),
             # Explicit -F overrides filename extension cleanly.
             ("bin", "opus", "48000", ["-F", "opus"]),
+            ("raw", "aac", None, ["-F", "m4a"]),
         ]
         for idx, (ext, exp_codec, exp_rate, extra_flags) in enumerate(cases):
             out_audio = os.path.join(self.tmpdir.name, f"cap_{idx}.{ext}")
@@ -795,7 +797,7 @@ class TestAudioLoopback(unittest.TestCase):
             mean_db, _ = probe_volume(["-i", out_audio])
             self.assertAlmostEqual(mean_db, self.ref_mean, delta=2.5, msg=ext)
 
-    def test_append_wav_and_opus_splice(self):
+    def test_append_wav_opus_and_m4a_splice(self):
         bad_wav = os.path.join(self.tmpdir.name, "not_wav.wav")
         bad_cast = os.path.join(self.tmpdir.name, "not_wav.cast")
         with open(bad_wav, "wb") as f:
@@ -806,7 +808,16 @@ class TestAudioLoopback(unittest.TestCase):
         self.assertNotEqual(rc, 0)
         self.assertIn("not a valid wav", err)
 
-        for ext, exp_codec in [("wav", "pcm_s16le"), ("opus", "opus")]:
+        bad_m4a = os.path.join(self.tmpdir.name, "not_m4a.m4a")
+        with open(bad_m4a, "wb") as f:
+            f.write(b"not really an m4a file\n")
+        rc, _, _, err = run_in_pty([
+            "record", "-N", "-A", "-d", self.st_dev, "-a", bad_m4a, bad_cast,
+        ])
+        self.assertNotEqual(rc, 0)
+        self.assertIn("not a valid m4a", err)
+
+        for ext, exp_codec in [("wav", "pcm_s16le"), ("opus", "opus"), ("m4a", "aac")]:
             out_audio = os.path.join(self.tmpdir.name, f"append_{ext}.{ext}")
             cast_path = os.path.join(self.tmpdir.name, f"append_{ext}.cast")
 
@@ -820,6 +831,7 @@ class TestAudioLoopback(unittest.TestCase):
             finally:
                 play.wait()
             self.assertEqual(rc, 0, msg=f"{ext} s1: {err}")
+            self.assertEqual(err, "", msg=f"{ext} s1 stderr: {err}")
             dur1 = float(ffprobe_stream(out_audio)["duration"])
 
             # Append with MONO source onto STEREO file across formats.
@@ -833,6 +845,7 @@ class TestAudioLoopback(unittest.TestCase):
             finally:
                 play.wait()
             self.assertEqual(rc, 0, msg=f"{ext} s2: {err}")
+            self.assertEqual(err, "", msg=f"{ext} s2 stderr: {err}")
             info2 = ffprobe_stream(out_audio)
             self.assertEqual(info2.get("codec_name"), exp_codec)
             self.assertEqual(info2.get("channels"), 2)
