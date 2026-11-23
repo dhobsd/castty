@@ -109,11 +109,16 @@ format. Its output files should be compatible with the asciinema player
 ## Web Interface
 
 The `ui` directory of the repository is a self-contained implementation of a
-CasTTY player. Utilities used include:
+CasTTY player. Third-party dependencies are stored unmodified in `ui/vendor/`
+and bundled into `ui/css/min.css` and `ui/js/min.js` via `make -C ui` (using
+`make -C ui fetch-vendor` to re-fetch and verify upstream archives):
 
- * [jQuery](https://jquery.com/)
- * [rangeslider.js](https://github.com/andreruffert/rangeslider.js)
- * [xterm.js](https://github.com/sourcelair/xterm.js)
+ * [jQuery](https://jquery.com/) (`3.1.1`)
+ * [rangeslider.js](https://github.com/andreruffert/rangeslider.js) (`2.3.0`)
+ * [xterm.js](https://github.com/sourcelair/xterm.js) (`2.4.0`)
+
+CasTTY's own styles and player code live unminified in `ui/css/player.css` and
+`ui/js/player.js`.
 
 Licenses for all these utilities can be found in their respective repositories
 and in the LICENSE file in this repository.
