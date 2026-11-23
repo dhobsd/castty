@@ -150,20 +150,22 @@ audio_format_name(enum audio_format afmt)
 	return "auto";
 }
 
-static enum audio_format
-resolve_audio_format(const char *outfile)
+const char *
+audio_format_label(enum audio_format afmt)
+{
+	return audio_format_name(afmt);
+}
+
+enum audio_format
+audio_infer_format(const char *path)
 {
 	const char *slash, *base, *dot;
 
-	if (requested_fmt != AUDIO_FMT_AUTO) {
-		return requested_fmt;
-	}
-	if (outfile == NULL) {
+	if (path == NULL) {
 		return AUDIO_FMT_RAW;
 	}
-
-	slash = strrchr(outfile, '/');
-	base = slash ? slash + 1 : outfile;
+	slash = strrchr(path, '/');
+	base = slash ? slash + 1 : path;
 	dot = strrchr(base, '.');
 	if (dot == NULL) {
 		return AUDIO_FMT_RAW;
@@ -177,8 +179,17 @@ resolve_audio_format(const char *outfile)
 	return AUDIO_FMT_RAW;
 }
 
-static struct audio_writer *
-create_audio_writer(FILE *fout, enum audio_format afmt, int rate, int mono)
+static enum audio_format
+resolve_audio_format(const char *outfile)
+{
+	if (requested_fmt != AUDIO_FMT_AUTO) {
+		return requested_fmt;
+	}
+	return audio_infer_format(outfile);
+}
+
+struct audio_writer *
+audio_open_writer(FILE *fout, enum audio_format afmt, int rate, int mono)
 {
 	switch (afmt) {
 	case AUDIO_FMT_RAW:
@@ -200,23 +211,29 @@ create_audio_writer(FILE *fout, enum audio_format afmt, int rate, int mono)
 }
 
 int
-audio_set_format(const char *fmt_name)
+audio_parse_format(const char *fmt_name, enum audio_format *out)
 {
-	if (fmt_name == NULL) {
+	if (fmt_name == NULL || out == NULL) {
 		return -1;
 	}
 	if (strcasecmp(fmt_name, "auto") == 0) {
-		requested_fmt = AUDIO_FMT_AUTO;
+		*out = AUDIO_FMT_AUTO;
 		return 0;
 	}
 	for (unsigned i = 0;
 	    i < sizeof audio_fmt_table / sizeof audio_fmt_table[0]; i++) {
 		if (strcasecmp(fmt_name, audio_fmt_table[i].name) == 0) {
-			requested_fmt = audio_fmt_table[i].afmt;
+			*out = audio_fmt_table[i].afmt;
 			return 0;
 		}
 	}
 	return -1;
+}
+
+int
+audio_set_format(const char *fmt_name)
+{
+	return audio_parse_format(fmt_name, &requested_fmt);
 }
 
 static void
@@ -477,7 +494,7 @@ open_append_temp_writer(void)
 	}
 
 	ctx.aw_rate = ctx.stream->sample_rate;
-	ctx.aw = create_audio_writer(ctx.fout, ctx.afmt, ctx.aw_rate,
+	ctx.aw = audio_open_writer(ctx.fout, ctx.afmt, ctx.aw_rate,
 	    ctx.mono && !ctx.existing_stereo);
 	if (ctx.aw == NULL) {
 		fprintf(stderr, "Couldn't create %s writer\n",
@@ -595,33 +612,32 @@ append_splice_finish(struct append_splice *sp)
 	    2 * (int)sizeof(float), sp->dst_rate, sp->pre_frames);
 }
 
-static uint64_t
-prepare_mp3_append(void)
+static int
+decode_mp3_file(const char *path, audio_pcm_cb cb, void *userdata, char *errbuf,
+    size_t errsz)
 {
 	FILE *src_fp;
 	hip_t hip;
 	unsigned char buf[4096];
 	short dl[1152], dr[1152];
 	mp3data_struct md;
-	struct append_splice sp;
 	int enc_delay = -1, enc_padding = -1;
 	int src_rate = 0, src_ch = 0, skip_head = 0;
-	int dst_rate = ctx.stream->sample_rate;
+	int trim_cap = 0, trim_cnt = 0, trim_pos = 0;
+	float *trim_ring = NULL;
 	size_t nr;
 
-	open_append_temp_writer();
-	memset(&sp, 0, sizeof sp);
-	sp.dst_rate = dst_rate;
-
-	src_fp = fopen(ctx.outpath, "rb");
+	src_fp = fopen(path, "rb");
 	if (src_fp == NULL) {
-		perror("fopen");
-		exit(EXIT_FAILURE);
+		snprintf(errbuf, errsz, "castty: cannot open %s: %s", path,
+		    strerror(errno));
+		return -1;
 	}
 	hip = hip_decode_init();
 	if (hip == NULL) {
-		fprintf(stderr, "Couldn't initialize MP3 decoder\n");
-		exit(EXIT_FAILURE);
+		snprintf(errbuf, errsz, "castty: hip_decode_init failed");
+		fclose(src_fp);
+		return -1;
 	}
 
 	memset(&md, 0, sizeof md);
@@ -648,14 +664,25 @@ prepare_mp3_append(void)
 				break;
 			}
 			if (src_rate == 0 && md.header_parsed) {
-				int trim_src = (enc_delay >= 0 &&
-				    enc_padding >= 528) ? (enc_padding - 528) : 0;
-
 				src_rate = md.samplerate;
 				src_ch = md.stereo;
-				skip_head = (enc_delay >= 0) ? (enc_delay + 528) : 0;
-				append_splice_init(&sp, src_rate, dst_rate,
-				    trim_src);
+				skip_head = (enc_delay >= 0) ?
+				    (enc_delay + 528) : 0;
+				trim_cap = (enc_delay >= 0 &&
+				    enc_padding >= 528) ?
+				    (enc_padding - 528) : 0;
+				if (trim_cap > 0) {
+					trim_ring = calloc((size_t)trim_cap * 2,
+					    sizeof *trim_ring);
+					if (trim_ring == NULL) {
+						snprintf(errbuf, errsz,
+						    "castty: out of memory decoding %s",
+						    path);
+						hip_decode_exit(hip);
+						fclose(src_fp);
+						return -1;
+					}
+				}
 			}
 			if (src_rate == 0) {
 				continue;
@@ -669,8 +696,23 @@ prepare_mp3_append(void)
 					continue;
 				}
 				sl = (float)dl[i] / 32768.0f;
-				sr = (src_ch > 1) ? ((float)dr[i] / 32768.0f) : sl;
-				append_splice_push(&sp, sl, sr);
+				sr = (src_ch > 1) ?
+				    ((float)dr[i] / 32768.0f) : sl;
+				if (trim_cap == 0) {
+					cb(userdata, src_rate, sl, sr);
+				} else if (trim_cnt < trim_cap) {
+					trim_ring[(size_t)trim_cnt * 2] = sl;
+					trim_ring[(size_t)trim_cnt * 2 + 1] = sr;
+					trim_cnt++;
+				} else {
+					size_t idx = (size_t)trim_pos * 2;
+
+					cb(userdata, src_rate, trim_ring[idx],
+					    trim_ring[idx + 1]);
+					trim_ring[idx] = sl;
+					trim_ring[idx + 1] = sr;
+					trim_pos = (trim_pos + 1) % trim_cap;
+				}
 			}
 		}
 
@@ -679,43 +721,68 @@ prepare_mp3_append(void)
 		}
 	}
 
+	free(trim_ring);
 	hip_decode_exit(hip);
 	fclose(src_fp);
-	return append_splice_finish(&sp);
+	if (src_rate <= 0) {
+		snprintf(errbuf, errsz, "castty: %s contains no valid MP3 frames",
+		    path);
+		return -1;
+	}
+	return 0;
 }
 
-static uint64_t
-prepare_sndfile_append(void)
+static int
+decode_sndfile_file(const char *path, enum audio_format afmt, audio_pcm_cb cb,
+    void *userdata, char *errbuf, size_t errsz)
 {
 	enum {
-		SF_APPEND_CHUNK = 4096,
+		SF_DEC_CHUNK = 4096,
 	};
 	SF_INFO info;
 	SNDFILE *sf;
-	struct append_splice sp;
 	float *inbuf;
 	sf_count_t nread;
-
-	open_append_temp_writer();
+	int expected_sf, got_major, exp_major;
 
 	memset(&info, 0, sizeof info);
-	sf = sf_open(ctx.outpath, SFM_READ, &info);
+	sf = sf_open(path, SFM_READ, &info);
 	if (sf == NULL) {
-		fprintf(stderr, "Couldn't open %s for append: %s\n",
-		    ctx.outpath, sf_strerror(NULL));
-		exit(EXIT_FAILURE);
+		snprintf(errbuf, errsz, "castty: cannot open %s: %s", path,
+		    sf_strerror(NULL));
+		return -1;
+	}
+	if (afmt != AUDIO_FMT_AUTO) {
+		expected_sf = audio_sndfile_format(afmt);
+		got_major = info.format & SF_FORMAT_TYPEMASK;
+		exp_major = expected_sf & SF_FORMAT_TYPEMASK;
+		if (got_major != exp_major ||
+		    (exp_major == SF_FORMAT_OGG &&
+		    (info.format & SF_FORMAT_SUBMASK) !=
+		    (expected_sf & SF_FORMAT_SUBMASK))) {
+			sf_close(sf);
+			snprintf(errbuf, errsz, "castty: %s is not in %s format",
+			    path, audio_format_name(afmt));
+			return -1;
+		}
+	}
+	if (info.samplerate <= 0 || info.channels <= 0) {
+		sf_close(sf);
+		snprintf(errbuf, errsz, "castty: %s contains invalid audio",
+		    path);
+		return -1;
 	}
 
-	inbuf = calloc((size_t)SF_APPEND_CHUNK * (size_t)info.channels,
+	inbuf = calloc((size_t)SF_DEC_CHUNK * (size_t)info.channels,
 	    sizeof *inbuf);
 	if (inbuf == NULL) {
-		perror("calloc");
 		sf_close(sf);
-		exit(EXIT_FAILURE);
+		snprintf(errbuf, errsz, "castty: out of memory decoding %s",
+		    path);
+		return -1;
 	}
 
-	append_splice_init(&sp, info.samplerate, ctx.stream->sample_rate, 0);
-	while ((nread = sf_readf_float(sf, inbuf, SF_APPEND_CHUNK)) > 0) {
+	while ((nread = sf_readf_float(sf, inbuf, SF_DEC_CHUNK)) > 0) {
 		sf_count_t i;
 
 		for (i = 0; i < nread; i++) {
@@ -723,49 +790,95 @@ prepare_sndfile_append(void)
 			float sr = (info.channels > 1) ?
 			    inbuf[i * info.channels + 1] : sl;
 
-			append_splice_push(&sp, sl, sr);
+			cb(userdata, info.samplerate, sl, sr);
 		}
 	}
 
 	free(inbuf);
 	sf_close(sf);
-	return append_splice_finish(&sp);
+	return 0;
 }
 
-struct m4a_decode_ctx {
+int
+audio_probe_file(const char *path, enum audio_format fmt, int *rate_out,
+    int *stereo_out, char *errbuf, size_t errsz)
+{
+	if (fmt == AUDIO_FMT_AUTO) {
+		fmt = audio_infer_format(path);
+	}
+	if (fmt == AUDIO_FMT_MP3) {
+		return probe_mp3_file(path, rate_out, stereo_out, errbuf,
+		    errsz);
+	}
+	if (fmt == AUDIO_FMT_M4A) {
+		return audio_m4a_probe(path, rate_out, stereo_out, errbuf,
+		    errsz);
+	}
+	if (audio_sndfile_format(fmt) != 0) {
+		return probe_sndfile_file(path, fmt, rate_out, stereo_out,
+		    errbuf, errsz);
+	}
+	snprintf(errbuf, errsz, "castty: unsupported probe format %s",
+	    audio_format_name(fmt));
+	return -1;
+}
+
+int
+audio_decode_file(const char *path, enum audio_format fmt, audio_pcm_cb cb,
+    void *userdata, char *errbuf, size_t errsz)
+{
+	if (fmt == AUDIO_FMT_AUTO) {
+		fmt = audio_infer_format(path);
+	}
+	if (fmt == AUDIO_FMT_MP3) {
+		return decode_mp3_file(path, cb, userdata, errbuf, errsz);
+	}
+	if (fmt == AUDIO_FMT_M4A) {
+		return audio_m4a_decode(path, cb, userdata, errbuf, errsz);
+	}
+	if (audio_sndfile_format(fmt) != 0) {
+		return decode_sndfile_file(path, fmt, cb, userdata, errbuf,
+		    errsz);
+	}
+	snprintf(errbuf, errsz, "castty: cannot decode format %s cleanly",
+	    audio_format_name(fmt));
+	return -1;
+}
+
+struct encoded_append_ctx {
 	struct append_splice sp;
 	int initialized;
 };
 
 static void
-m4a_decode_cb(void *userdata, int src_rate, float sl, float sr)
+encoded_append_cb(void *userdata, int src_rate, float sl, float sr)
 {
-	struct m4a_decode_ctx *dc = userdata;
+	struct encoded_append_ctx *ec = userdata;
 
-	if (!dc->initialized) {
-		append_splice_init(&dc->sp, src_rate, ctx.stream->sample_rate,
+	if (!ec->initialized) {
+		append_splice_init(&ec->sp, src_rate, ctx.stream->sample_rate,
 		    0);
-		dc->initialized = 1;
+		ec->initialized = 1;
 	}
-	append_splice_push(&dc->sp, sl, sr);
+	append_splice_push(&ec->sp, sl, sr);
 }
 
 static uint64_t
-prepare_m4a_append(void)
+prepare_encoded_append(void)
 {
-	struct m4a_decode_ctx dc;
+	struct encoded_append_ctx ec;
 	char errbuf[256];
 
 	open_append_temp_writer();
-	memset(&dc, 0, sizeof dc);
-	dc.sp.dst_rate = ctx.stream->sample_rate;
+	memset(&ec, 0, sizeof ec);
+	ec.sp.dst_rate = ctx.stream->sample_rate;
 
-	if (audio_m4a_decode(ctx.outpath, m4a_decode_cb, &dc, errbuf,
-	    sizeof errbuf) != 0) {
+	if (audio_decode_file(ctx.outpath, ctx.afmt, encoded_append_cb, &ec,
+	    errbuf, sizeof errbuf) != 0) {
 		fprintf(stderr, "%s\n", errbuf);
 		exit(EXIT_FAILURE);
 	}
-	return append_splice_finish(&dc.sp);
+	return append_splice_finish(&ec.sp);
 }
 
 static uint64_t
@@ -917,8 +1030,8 @@ vu_quantize(float v)
 	return (uint16_t)(v * 32767.0f + 0.5f);
 }
 
-static uint64_t
-vu_pack(float rms_l, float rms_r, float peak_l, float peak_r, int clip,
+uint64_t
+audio_vu_pack(float rms_l, float rms_r, float peak_l, float peak_r, int clip,
     int stereo)
 {
 	return ((uint64_t)vu_quantize(rms_l)) |
@@ -927,6 +1040,17 @@ vu_pack(float rms_l, float rms_r, float peak_l, float peak_r, int clip,
 	    ((uint64_t)vu_quantize(peak_r) << 45) |
 	    ((uint64_t)(clip ? 1 : 0) << 60) |
 	    ((uint64_t)(stereo ? 1 : 0) << 61);
+}
+
+void
+audio_vu_unpack(uint64_t packed, struct audio_vu *out)
+{
+	out->rms_l = (float)(packed & 0x7fffu) / 32767.0f;
+	out->rms_r = (float)((packed >> 15) & 0x7fffu) / 32767.0f;
+	out->peak_l = (float)((packed >> 30) & 0x7fffu) / 32767.0f;
+	out->peak_r = (float)((packed >> 45) & 0x7fffu) / 32767.0f;
+	out->clipped = (int)((packed >> 60) & 1u);
+	out->stereo = (int)((packed >> 61) & 1u);
 }
 
 static void
@@ -1039,7 +1163,7 @@ audio_record(struct SoundIoInStream *stream, int min_frames, int max_frames)
 		    sqrtf((float)(sum_sq_l / (double)written_frames)) : 0.0f;
 		float rr = (!is_muted) ?
 		    sqrtf((float)(sum_sq_r / (double)written_frames)) : 0.0f;
-		uint64_t packed = vu_pack(rl, rr, max_l, max_r, clipped,
+		uint64_t packed = audio_vu_pack(rl, rr, max_l, max_r, clipped,
 		    !ctx.mono);
 
 		atomic_store_explicit(&ctx.vu_packed, packed,
@@ -1072,12 +1196,7 @@ audio_get_vu(struct audio_vu *out)
 	seq = atomic_load_explicit(&ctx.vu_seq, memory_order_acquire);
 	packed = atomic_load_explicit(&ctx.vu_packed, memory_order_relaxed);
 	out->seq = seq;
-	out->rms_l = (float)(packed & 0x7fffu) / 32767.0f;
-	out->rms_r = (float)((packed >> 15) & 0x7fffu) / 32767.0f;
-	out->peak_l = (float)((packed >> 30) & 0x7fffu) / 32767.0f;
-	out->peak_r = (float)((packed >> 45) & 0x7fffu) / 32767.0f;
-	out->clipped = (int)((packed >> 60) & 1u);
-	out->stereo = (int)((packed >> 61) & 1u);
+	audio_vu_unpack(packed, out);
 }
 
 int
@@ -1280,14 +1399,10 @@ audio_start(void)
 		uint64_t pre_frames = 0;
 
 		if (ctx.append && stat(ctx.outpath, &st) == 0 && st.st_size > 0) {
-			if (ctx.afmt == AUDIO_FMT_MP3) {
-				pre_frames = prepare_mp3_append();
-			} else if (ctx.afmt == AUDIO_FMT_M4A) {
-				pre_frames = prepare_m4a_append();
-			} else if (audio_sndfile_format(ctx.afmt) != 0) {
-				pre_frames = prepare_sndfile_append();
-			} else {
+			if (ctx.afmt == AUDIO_FMT_RAW) {
 				pre_frames = prepare_raw_append();
+			} else {
+				pre_frames = prepare_encoded_append();
 			}
 			ctx.base_clock_ms = ((double)pre_frames * 1000.0) /
 			    (double)ctx.stream->sample_rate;
@@ -1296,7 +1411,7 @@ audio_start(void)
 				ctx.fout = xfopen(ctx.outpath, "w+b");
 			}
 			ctx.aw_rate = ctx.stream->sample_rate;
-			ctx.aw = create_audio_writer(ctx.fout, ctx.afmt,
+			ctx.aw = audio_open_writer(ctx.fout, ctx.afmt,
 			    ctx.aw_rate, ctx.mono);
 			if (ctx.aw == NULL) {
 				fprintf(stderr,
@@ -1369,21 +1484,11 @@ audio_check_append(const char *outfile, char *errbuf, size_t errsz)
 	if (st.st_size == 0) {
 		return 0;
 	}
-	if (afmt == AUDIO_FMT_MP3 || afmt == AUDIO_FMT_M4A ||
-	    audio_sndfile_format(afmt) != 0) {
-		int rate = 0, stereo = 0, rc;
+	if (afmt != AUDIO_FMT_RAW) {
+		int rate = 0, stereo = 0;
 
-		if (afmt == AUDIO_FMT_MP3) {
-			rc = probe_mp3_file(outfile, &rate, &stereo, errbuf,
-			    errsz);
-		} else if (afmt == AUDIO_FMT_M4A) {
-			rc = audio_m4a_probe(outfile, &rate, &stereo, errbuf,
-			    errsz);
-		} else {
-			rc = probe_sndfile_file(outfile, afmt, &rate, &stereo,
-			    errbuf, errsz);
-		}
-		if (rc != 0) {
+		if (audio_probe_file(outfile, afmt, &rate, &stereo, errbuf,
+		    errsz) != 0) {
 			return -1;
 		}
 		ctx.pref_rate = rate;
@@ -1474,8 +1579,6 @@ audio_stop(void)
 		ctx.base_clock_ms += ((double)frames * 1000.0) / (double)rate;
 	}
 	atomic_store_explicit(&ctx.clock_frames, 0, memory_order_release);
-	atomic_store_explicit(&ctx.vu_packed, 0, memory_order_relaxed);
-	atomic_store_explicit(&ctx.vu_running, 1, memory_order_release);
 
 	atomic_store_explicit(&stopping, 1, memory_order_release);
 	pthread_join(wthread, NULL);
@@ -1523,8 +1626,68 @@ audio_exit(void)
 	ctx.outpath = NULL;
 }
 
-void
-audio_list_inputs(void)
+static void
+print_device_list(struct SoundIo *soundio, int is_input)
+{
+	const struct SoundIoChannelLayout *stereo, *mono;
+	int ndev = is_input ? soundio_input_device_count(soundio) :
+	    soundio_output_device_count(soundio);
+
+	if (ndev == 0) {
+		fprintf(stderr, "No %s devices available.\n",
+		    is_input ? "input" : "output");
+		return;
+	}
+
+	stereo = soundio_channel_layout_get_builtin(SoundIoChannelLayoutIdStereo);
+	mono = soundio_channel_layout_get_builtin(SoundIoChannelLayoutIdMono);
+	printf("Available %s devices:\n", is_input ? "input" : "output");
+
+	for (int i = 0; i < ndev; i++) {
+		struct SoundIoDevice *dev = is_input ?
+		    soundio_get_input_device(soundio, i) :
+		    soundio_get_output_device(soundio, i);
+		enum SoundIoFormat fmt = SoundIoFormatInvalid;
+		int rate = 0;
+
+		if (dev->probe_error ||
+		    (!soundio_device_supports_layout(dev, stereo) &&
+		    !soundio_device_supports_layout(dev, mono))) {
+			soundio_device_unref(dev);
+			continue;
+		}
+
+		for (unsigned j = 0; j < sizeof formats / sizeof formats[0]; j++) {
+			if (soundio_device_supports_format(dev, formats[j])) {
+				fmt = formats[j];
+				break;
+			}
+		}
+		for (unsigned j = 0; j < sizeof rates / sizeof rates[0]; j++) {
+			if (soundio_device_supports_sample_rate(dev, rates[j])) {
+				rate = rates[j];
+				break;
+			}
+		}
+		if (fmt == SoundIoFormatInvalid || rate == 0) {
+			soundio_device_unref(dev);
+			continue;
+		}
+
+		printf("%4d: %s%s, %dHz, format: '%s'\n"
+		    "      castty %s %s '%s'%s%s\n",
+		    i, dev->name, dev->is_raw ? " (raw)" : "",
+		    rate, soundio_format_string(fmt),
+		    is_input ? "record" : "edit",
+		    is_input ? "-d" : "-o",
+		    dev->id, dev->is_raw ? " -R" : "",
+		    is_input ? " -a audio.raw" : " events.cast");
+		soundio_device_unref(dev);
+	}
+}
+
+static void
+list_devices(int show_inputs, int show_outputs)
 {
 	struct SoundIo *soundio;
 	int err;
@@ -1543,72 +1706,27 @@ audio_list_inputs(void)
 
 	soundio_flush_events(soundio);
 
-	int ndev = soundio_input_device_count(soundio);
-	if (ndev == 0) {
-		fprintf(stderr, "No input devices available.\n");
-		soundio_disconnect(soundio);
-		soundio_destroy(soundio);
-		exit(EXIT_FAILURE);
+	if (show_inputs) {
+		print_device_list(soundio, 1);
 	}
-
-
-	printf("Available input devices:\n");
-
-	for (int i = 0; i < ndev; i++) {
-		const struct SoundIoChannelLayout *stereo, *mono;
-		struct SoundIoDevice *dev;
-		enum SoundIoFormat fmt;
-		int rate;
-
-		dev = soundio_get_input_device(soundio, i);
-		if (dev->probe_error) {
-			soundio_device_unref(dev);
-			continue;
-		}
-
-		stereo = soundio_channel_layout_get_builtin(SoundIoChannelLayoutIdStereo);
-		mono = soundio_channel_layout_get_builtin(SoundIoChannelLayoutIdMono);
-		if (!soundio_device_supports_layout(dev, stereo) &&
-		    !soundio_device_supports_layout(dev, mono)) {
-			soundio_device_unref(dev);
-			continue;
-		}
-
-		fmt = SoundIoFormatInvalid;
-		for (unsigned j = 0; j < sizeof formats / sizeof formats[0]; j++) {
-			if (soundio_device_supports_format(dev, formats[j])) {
-				fmt = formats[j];
-				break;
-			}
-		}
-
-		if (fmt == SoundIoFormatInvalid) {
-			soundio_device_unref(dev);
-			continue;
-		}
-
-		rate = 0;
-		for (unsigned j = 0; j < sizeof rates / sizeof rates[0]; j++) {
-			if (soundio_device_supports_sample_rate(dev, rates[j])) {
-				rate = rates[j];
-				break;
-			}
-		}
-
-		if (rate == 0) {
-			soundio_device_unref(dev);
-			continue;
-		}
-		printf("%4d: %s%s, %dHz, format: '%s'\n"
-		    "      castty record -d '%s'%s -a audio.raw\n",
-		    i, dev->name, dev->is_raw ? " (raw)" : "",
-		    rate, soundio_format_string(fmt),
-		    dev->id, dev->is_raw ? " -R" : "");
-		soundio_device_unref(dev);
+	if (show_outputs) {
+		print_device_list(soundio, 0);
 	}
 
 	soundio_disconnect(soundio);
 	soundio_destroy(soundio);
+}
 
+void
+audio_list_inputs(void)
+{
+	list_devices(1, 0);
+	exit(EXIT_SUCCESS);
+}
+
+void
+audio_list_outputs(void)
+{
+	list_devices(1, 1);
 	exit(EXIT_SUCCESS);
 }

@@ -1,231 +1,21 @@
 #include <ctype.h>
 #include <errno.h>
-#include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
 #include "cast.h"
-
-static const char *
-skip_ws(const char *p, const char *end)
-{
-	while (p < end && (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n')) {
-		p++;
-	}
-	return p;
-}
-
-static const char *
-skip_string(const char *p, const char *end)
-{
-	if (p >= end || *p != '"') {
-		return NULL;
-	}
-	p++;
-	while (p < end) {
-		if (*p == '\\') {
-			p++;
-			if (p >= end) {
-				return NULL;
-			}
-			p++;
-		} else if (*p == '"') {
-			return p + 1;
-		} else {
-			p++;
-		}
-	}
-	return NULL;
-}
-
-static const char *
-parse_string(const char *p, const char *end, char *out, size_t cap)
-{
-	size_t o = 0;
-
-	if (p >= end || *p != '"') {
-		return NULL;
-	}
-	p++;
-	while (p < end) {
-		if (*p == '"') {
-			if (cap > 0) {
-				out[o < cap ? o : cap - 1] = '\0';
-			}
-			return p + 1;
-		}
-		if (*p == '\\') {
-			p++;
-			if (p >= end) {
-				return NULL;
-			}
-			if (o + 1 < cap) {
-				out[o++] = *p;
-			}
-			p++;
-		} else {
-			if (o + 1 < cap) {
-				out[o++] = *p;
-			}
-			p++;
-		}
-	}
-	return NULL;
-}
-
-static const char *
-parse_double_tok(const char *p, const char *end, double *val)
-{
-	char buf[64], *eptr;
-	size_t n = 0;
-
-	p = skip_ws(p, end);
-	if (p >= end) {
-		return NULL;
-	}
-	while (p < end && n + 1 < sizeof buf &&
-	    (isdigit((unsigned char)*p) || *p == '+' || *p == '-' ||
-	     *p == '.' || *p == 'e' || *p == 'E')) {
-		buf[n++] = *p++;
-	}
-	if (n == 0) {
-		return NULL;
-	}
-	buf[n] = '\0';
-	errno = 0;
-	*val = strtod(buf, &eptr);
-	if (errno == ERANGE || eptr == buf || *eptr != '\0') {
-		return NULL;
-	}
-	return p;
-}
-
-static const char *
-parse_int_tok(const char *p, const char *end, int *val)
-{
-	double d;
-	const char *next = parse_double_tok(p, end, &d);
-
-	if (next == NULL || d < (double)INT_MIN || d > (double)INT_MAX) {
-		return NULL;
-	}
-	*val = (int)d;
-	return next;
-}
-
-static const char *skip_value(const char *p, const char *end);
-
-static const char *
-skip_array(const char *p, const char *end)
-{
-	p = skip_ws(p, end);
-	if (p >= end || *p != '[') {
-		return NULL;
-	}
-	p = skip_ws(p + 1, end);
-	if (p < end && *p == ']') {
-		return p + 1;
-	}
-	for (;;) {
-		p = skip_value(p, end);
-		if (p == NULL) {
-			return NULL;
-		}
-		p = skip_ws(p, end);
-		if (p >= end) {
-			return NULL;
-		}
-		if (*p == ']') {
-			return p + 1;
-		}
-		if (*p != ',') {
-			return NULL;
-		}
-		p++;
-	}
-}
-
-static const char *
-skip_object(const char *p, const char *end)
-{
-	p = skip_ws(p, end);
-	if (p >= end || *p != '{') {
-		return NULL;
-	}
-	p = skip_ws(p + 1, end);
-	if (p < end && *p == '}') {
-		return p + 1;
-	}
-	for (;;) {
-		p = skip_string(skip_ws(p, end), end);
-		if (p == NULL) {
-			return NULL;
-		}
-		p = skip_ws(p, end);
-		if (p >= end || *p != ':') {
-			return NULL;
-		}
-		p = skip_value(p + 1, end);
-		if (p == NULL) {
-			return NULL;
-		}
-		p = skip_ws(p, end);
-		if (p >= end) {
-			return NULL;
-		}
-		if (*p == '}') {
-			return p + 1;
-		}
-		if (*p != ',') {
-			return NULL;
-		}
-		p++;
-	}
-}
-
-static const char *
-skip_value(const char *p, const char *end)
-{
-	p = skip_ws(p, end);
-	if (p >= end) {
-		return NULL;
-	}
-	if (*p == '"') {
-		return skip_string(p, end);
-	}
-	if (*p == '{') {
-		return skip_object(p, end);
-	}
-	if (*p == '[') {
-		return skip_array(p, end);
-	}
-	if (*p == '-' || isdigit((unsigned char)*p)) {
-		double d;
-
-		return parse_double_tok(p, end, &d);
-	}
-	if (end - p >= 4 && memcmp(p, "true", 4) == 0) {
-		return p + 4;
-	}
-	if (end - p >= 5 && memcmp(p, "false", 5) == 0) {
-		return p + 5;
-	}
-	if (end - p >= 4 && memcmp(p, "null", 4) == 0) {
-		return p + 4;
-	}
-	return NULL;
-}
+#include "json.h"
 
 static int
 parse_term_obj(const char *p, const char *end, const char **next_out,
     int *cols, int *rows)
 {
-	p = skip_ws(p, end);
+	p = json_skip_ws(p, end);
 	if (p >= end || *p != '{') {
 		return -1;
 	}
-	p = skip_ws(p + 1, end);
+	p = json_skip_ws(p + 1, end);
 	if (p < end && *p == '}') {
 		*next_out = p + 1;
 		return 0;
@@ -233,26 +23,26 @@ parse_term_obj(const char *p, const char *end, const char **next_out,
 	for (;;) {
 		char key[64];
 
-		p = parse_string(skip_ws(p, end), end, key, sizeof key);
+		p = json_parse_string_buf(p, end, key, sizeof key);
 		if (p == NULL) {
 			return -1;
 		}
-		p = skip_ws(p, end);
+		p = json_skip_ws(p, end);
 		if (p >= end || *p != ':') {
 			return -1;
 		}
-		p = skip_ws(p + 1, end);
+		p = json_skip_ws(p + 1, end);
 		if (strcmp(key, "cols") == 0) {
-			p = parse_int_tok(p, end, cols);
+			p = json_parse_int(p, end, cols);
 		} else if (strcmp(key, "rows") == 0) {
-			p = parse_int_tok(p, end, rows);
+			p = json_parse_int(p, end, rows);
 		} else {
-			p = skip_value(p, end);
+			p = json_skip_value(p, end);
 		}
 		if (p == NULL) {
 			return -1;
 		}
-		p = skip_ws(p, end);
+		p = json_skip_ws(p, end);
 		if (p >= end) {
 			return -1;
 		}
@@ -271,11 +61,11 @@ static int
 parse_v1_stdout(const char *p, const char *end, const char **rbracket_out,
     double *sum_sec, int *elem_count)
 {
-	p = skip_ws(p, end);
+	p = json_skip_ws(p, end);
 	if (p >= end || *p != '[') {
 		return -1;
 	}
-	p = skip_ws(p + 1, end);
+	p = json_skip_ws(p + 1, end);
 	if (p < end && *p == ']') {
 		*rbracket_out = p;
 		return 0;
@@ -283,23 +73,23 @@ parse_v1_stdout(const char *p, const char *end, const char **rbracket_out,
 	for (;;) {
 		double dt = 0.0;
 
-		p = skip_ws(p, end);
+		p = json_skip_ws(p, end);
 		if (p >= end || *p != '[') {
 			return -1;
 		}
-		p = parse_double_tok(p + 1, end, &dt);
+		p = json_parse_double(p + 1, end, &dt);
 		if (p == NULL) {
 			return -1;
 		}
-		p = skip_ws(p, end);
+		p = json_skip_ws(p, end);
 		if (p >= end || *p != ',') {
 			return -1;
 		}
-		p = skip_value(p + 1, end);
+		p = json_skip_value(p + 1, end);
 		if (p == NULL) {
 			return -1;
 		}
-		p = skip_ws(p, end);
+		p = json_skip_ws(p, end);
 		if (p >= end || *p != ']') {
 			return -1;
 		}
@@ -309,7 +99,7 @@ parse_v1_stdout(const char *p, const char *end, const char **rbracket_out,
 		}
 		(*elem_count)++;
 
-		p = skip_ws(p, end);
+		p = json_skip_ws(p, end);
 		if (p >= end) {
 			return -1;
 		}
@@ -335,7 +125,7 @@ parse_ndjson_events(const char *p, const char *end, int version,
 		double t = 0.0;
 		char code[16], payload[64];
 
-		p = skip_ws(p, end);
+		p = json_skip_ws(p, end);
 		if (p >= end) {
 			break;
 		}
@@ -348,43 +138,44 @@ parse_ndjson_events(const char *p, const char *end, int version,
 		if (*p != '[') {
 			return -1;
 		}
-		p = parse_double_tok(p + 1, end, &t);
+		p = json_parse_double(p + 1, end, &t);
 		if (p == NULL) {
 			return -1;
 		}
-		p = skip_ws(p, end);
+		p = json_skip_ws(p, end);
 		if (p >= end || *p != ',') {
 			return -1;
 		}
-		p = parse_string(skip_ws(p + 1, end), end, code, sizeof code);
+		p = json_parse_string_buf(p + 1, end, code, sizeof code);
 		if (p == NULL) {
 			return -1;
 		}
-		p = skip_ws(p, end);
+		p = json_skip_ws(p, end);
 		if (p >= end || *p != ',') {
 			return -1;
 		}
-		p = skip_ws(p + 1, end);
+		p = json_skip_ws(p + 1, end);
 		if (strcmp(code, "m") == 0) {
 			markers++;
 		}
 		if (strcmp(code, "r") == 0 && p < end && *p == '"') {
 			int rc = 0, rr = 0;
 
-			p = parse_string(p, end, payload, sizeof payload);
+			p = json_parse_string_buf(p, end, payload,
+			    sizeof payload);
 			if (p != NULL && sscanf(payload, "%dx%d", &rc, &rr) == 2 &&
 			    rc > 0 && rr > 0) {
 				*cols = rc;
 				*rows = rr;
 			}
 		} else {
-			p = skip_value(p, end);
+			p = json_skip_value(p, end);
 		}
 		if (p == NULL) {
 			return -1;
 		}
 		for (;;) {
-			p = skip_ws(p, end);
+			p = json_skip_ws(p, end);
 			if (p >= end) {
 				return -1;
 			}
@@ -395,7 +186,7 @@ parse_ndjson_events(const char *p, const char *end, int version,
 			if (*p != ',') {
 				return -1;
 			}
-			p = skip_value(p + 1, end);
+			p = json_skip_value(p + 1, end);
 			if (p == NULL) {
 				return -1;
 			}
@@ -432,7 +223,7 @@ build_v1_rewrite(const char *obj_start, const char *stdout_key,
 	char *out = malloc(cap);
 	size_t len = 0;
 	const char *cursor = obj_start;
-	const char *after_stdout = skip_ws(stdout_rbracket + 1, obj_end);
+	const char *after_stdout = json_skip_ws(stdout_rbracket + 1, obj_end);
 	const char *p;
 
 	if (out == NULL) {
@@ -454,7 +245,7 @@ build_v1_rewrite(const char *obj_start, const char *stdout_key,
 			memcpy(out + len, rest, (size_t)(stdout_key - rest));
 			len += (size_t)(stdout_key - rest);
 		} else {
-			rest = skip_ws(rest, stdout_key);
+			rest = json_skip_ws(rest, stdout_key);
 			if (rest < stdout_key && *rest == ',') {
 				rest++;
 			}
@@ -475,23 +266,23 @@ build_v1_rewrite(const char *obj_start, const char *stdout_key,
 		char key[64];
 
 		if (*p == ',') {
-			p = skip_ws(p + 1, obj_end);
+			p = json_skip_ws(p + 1, obj_end);
 		}
 		if (p >= obj_end || *p == '}') {
 			break;
 		}
 		mem_start = p;
-		p = parse_string(p, obj_end, key, sizeof key);
+		p = json_parse_string_buf(p, obj_end, key, sizeof key);
 		if (p == NULL) {
 			free(out);
 			return -1;
 		}
-		p = skip_ws(p, obj_end);
+		p = json_skip_ws(p, obj_end);
 		if (p >= obj_end || *p != ':') {
 			free(out);
 			return -1;
 		}
-		mem_end = skip_value(p + 1, obj_end);
+		mem_end = json_skip_value(p + 1, obj_end);
 		if (mem_end == NULL) {
 			free(out);
 			return -1;
@@ -501,7 +292,7 @@ build_v1_rewrite(const char *obj_start, const char *stdout_key,
 			len += (size_t)(mem_end - mem_start);
 			out[len++] = ',';
 		}
-		p = skip_ws(mem_end, obj_end);
+		p = json_skip_ws(mem_end, obj_end);
 	}
 
 	memcpy(out + len, stdout_key, (size_t)(stdout_rbracket - stdout_key));
@@ -565,7 +356,7 @@ cast_inspect(const char *path, int req_version, struct cast_append_info *info,
 	buf[fsz] = '\0';
 
 	end = buf + fsz;
-	p = skip_ws(buf, end);
+	p = json_skip_ws(buf, end);
 	if (p >= end) {
 		free(buf);
 		return 0;
@@ -578,31 +369,32 @@ cast_inspect(const char *path, int req_version, struct cast_append_info *info,
 	}
 
 	obj_start = p;
-	p = skip_ws(p + 1, end);
+	p = json_skip_ws(p + 1, end);
 	if (p < end && *p != '}') {
 		for (;;) {
-			const char *key_start = skip_ws(p, end);
+			const char *key_start = json_skip_ws(p, end);
 			const char *val_start;
 			char key[64];
 
-			p = parse_string(key_start, end, key, sizeof key);
+			p = json_parse_string_buf(key_start, end, key,
+			    sizeof key);
 			if (p == NULL) {
 				obj_end = NULL;
 				break;
 			}
-			p = skip_ws(p, end);
+			p = json_skip_ws(p, end);
 			if (p >= end || *p != ':') {
 				obj_end = NULL;
 				break;
 			}
-			val_start = skip_ws(p + 1, end);
+			val_start = json_skip_ws(p + 1, end);
 
 			if (strcmp(key, "version") == 0) {
-				p = parse_int_tok(val_start, end, &version);
+				p = json_parse_int(val_start, end, &version);
 			} else if (strcmp(key, "width") == 0) {
-				p = parse_int_tok(val_start, end, &cols);
+				p = json_parse_int(val_start, end, &cols);
 			} else if (strcmp(key, "height") == 0) {
-				p = parse_int_tok(val_start, end, &rows);
+				p = json_parse_int(val_start, end, &rows);
 			} else if (strcmp(key, "term") == 0) {
 				if (parse_term_obj(val_start, end, &p, &cols,
 				    &rows) != 0) {
@@ -610,7 +402,8 @@ cast_inspect(const char *path, int req_version, struct cast_append_info *info,
 				}
 			} else if (strcmp(key, "duration") == 0) {
 				dur_start = key_start;
-				p = parse_double_tok(val_start, end, &top_dur_sec);
+				p = json_parse_double(val_start, end,
+				    &top_dur_sec);
 				dur_end = p;
 				has_dur = (p != NULL);
 				if (stdout_rbracket != NULL && dur_after_other) {
@@ -628,14 +421,14 @@ cast_inspect(const char *path, int req_version, struct cast_append_info *info,
 				if (stdout_rbracket != NULL) {
 					dur_after_other = 1;
 				}
-				p = skip_value(val_start, end);
+				p = json_skip_value(val_start, end);
 			}
 
 			if (p == NULL) {
 				obj_end = NULL;
 				break;
 			}
-			p = skip_ws(p, end);
+			p = json_skip_ws(p, end);
 			if (p >= end) {
 				obj_end = NULL;
 				break;
@@ -674,7 +467,7 @@ cast_inspect(const char *path, int req_version, struct cast_append_info *info,
 	info->rows = rows > 0 ? rows : 24;
 
 	if (version == 1) {
-		const char *tail = skip_ws(obj_end, end);
+		const char *tail = json_skip_ws(obj_end, end);
 
 		if (stdout_rbracket == NULL || tail != end) {
 			snprintf(errbuf, errsz,

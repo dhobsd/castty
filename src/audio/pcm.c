@@ -4,10 +4,6 @@
 
 #include "audio/pcm.h"
 
-#ifndef M_PI
-#define M_PI 3.14159265358979323846
-#endif
-
 static uint16_t
 read_u16le(const unsigned char *p)
 {
@@ -354,6 +350,20 @@ pcm_encode_sample(enum SoundIoFormat fmt, unsigned char *p, float val)
 	}
 }
 
+double
+pcm_half_cosine_gain(uint64_t pos, uint64_t total, int fade_out)
+{
+	double t;
+
+	if (total == 0 || pos >= total) {
+		return fade_out ? 0.0 : 1.0;
+	}
+	t = fade_out ? (double)(pos + 1) / (double)total :
+	    (double)pos / (double)total;
+	return fade_out ? 0.5 * (1.0 + cos(M_PI * t)) :
+	    0.5 * (1.0 - cos(M_PI * t));
+}
+
 void
 pcm_fade_frames(enum SoundIoFormat fmt, unsigned char *data, int nframes,
     int nchannels, int frame_bytes, int sample_bytes, int start_pos,
@@ -367,17 +377,10 @@ pcm_fade_frames(enum SoundIoFormat fmt, unsigned char *data, int nframes,
 
 	for (i = 0; i < nframes; i++) {
 		int pos = start_pos + i;
-		double t, gain;
+		double gain = (pos < 0) ? (fade_out ? 1.0 : 0.0) :
+		    pcm_half_cosine_gain((uint64_t)pos, (uint64_t)total_fade,
+		    fade_out);
 		unsigned char *frame;
-
-		if (pos >= total_fade) {
-			gain = fade_out ? 0.0 : 1.0;
-		} else {
-			t = fade_out ? (double)(pos + 1) / (double)total_fade :
-			    (double)pos / (double)total_fade;
-			gain = fade_out ? 0.5 * (1.0 + cos(M_PI * t)) :
-			    0.5 * (1.0 - cos(M_PI * t));
-		}
 
 		frame = data + (size_t)i * frame_bytes;
 		for (ch = 0; ch < nchannels; ch++) {
