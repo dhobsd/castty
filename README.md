@@ -40,20 +40,23 @@ installed to a location other than `/usr/local/`, you will have to edit the
 
 ## Usage
 
-    usage: castty record [-acdelrt] [out.json]
+    usage: castty record [-23acDdehlmprt] [out.cast]
+     -2             Output asciicast v2 instead of asciicast v1 format.
+     -3             Output asciicast v3 instead of asciicast v1 format.
      -a <outfile>   Output audio to <outfile>. Must be specified with -d.
      -c <cols>      Use <cols> columns in the recorded shell session.
-     -D <outfile>   Send debugging information into <outfile>
+     -D <outfile>   Send debugging information into <outfile>.
      -d <device>    Use audio device <device> for input.
      -e <cmd>       Execute <cmd> from the recorded shell session.
      -l             List available audio input devices and exit.
      -m             Encode audio to mp3 before writing.
+     -p             Begin the recording in paused mode.
      -r <rows>      Use <rows> rows in the recorded shell session.
      -R             Use a raw sound device.
      -t <title>     Title of the cast.
     
-     [out.json]     Optional output filename of recorded events. If not specified,
-                    a file "events.json" will be created.
+     [out.cast]     Optional output filename of recorded events. If not specified,
+                    a file "events.cast" will be created.
 
 To list usable input devices for recording, just run `castty record -l`. Output will
 look something like this:
@@ -103,7 +106,11 @@ CasTTY supports UTF-8 input.
 
 CasTTY outputs in
 [asciicast v1](https://github.com/asciinema/asciinema/blob/master/doc/asciicast-v1.md)
-format. Its output files should be compatible with the asciinema player
+format by default, or
+[asciicast v2](https://github.com/asciinema/asciinema/blob/master/doc/asciicast-v2.md)
+(`-2`) and
+[asciicast v3](https://docs.asciinema.org/manual/asciicast/v3/)
+(`-3`). Its output files should be compatible with the asciinema player
 (though that player does not support audio).
 
 ## Web Interface
