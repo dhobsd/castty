@@ -34,3 +34,7 @@
 	float: right;
 	width: calc(100% - 40px);
 }
+
+.xterm .xterm-viewport {
+	overflow-y: auto;
+}

@@ -115,7 +115,7 @@ and bundled into `ui/css/min.css` and `ui/js/min.js` via `make -C ui` (using
 
  * [jQuery](https://jquery.com/) (`3.7.1`)
  * [rangeslider.js](https://github.com/andreruffert/rangeslider.js) (`2.3.3`)
- * [xterm.js](https://github.com/sourcelair/xterm.js) (`2.4.0`)
+ * [@xterm/xterm](https://github.com/xtermjs/xterm.js) (`6.0.0`)
 
 CasTTY's own styles and player code live unminified in `ui/css/player.css` and
 `ui/js/player.js`.
