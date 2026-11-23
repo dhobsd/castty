@@ -8,7 +8,6 @@
 
 void setup_sighandlers(void);
 
-char *json_escape(const char *);
 void xclose(int);
 int xdup2(int, int);
 void xfclose(FILE *);

@@ -9,6 +9,7 @@
 #include <unistd.h>
 
 #include "castty.h"
+#include "json.h"
 #include "term.h"
 
 enum {
