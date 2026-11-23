@@ -95,17 +95,6 @@ def run_in_pty(args, send_seq=None, timeout=8.0, cwd=None, rows=40, cols=120,
     return proc.returncode, time.monotonic() - start, b"".join(out_chunks), stderr_data
 
 
-def castty_has_lame():
-    res = subprocess.run(
-        [CASTTY, "record", "-h"],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-    )
-    help_text = res.stdout + res.stderr
-    return "-m " in help_text
-
-
 def ffmpeg_fmt_from_soundio(fmt_desc):
     mapping = {
         "float 32-bit LE": "f32le",
@@ -189,7 +178,6 @@ def pipewire_loopback_available():
     return pactl.returncode == 0
 
 
-HAS_LAME = castty_has_lame()
 HAS_FFMPEG = bool(shutil.which("ffmpeg") and shutil.which("ffprobe"))
 HAS_LOOPBACK = pipewire_loopback_available()
 
@@ -434,7 +422,7 @@ class TestRecordingAndFormats(unittest.TestCase):
             self.assertGreaterEqual(d1e["duration"], 0.4)
 
 
-@unittest.skipUnless(HAS_LAME and HAS_FFMPEG, "requires WITH_LAME and ffmpeg/ffprobe")
+@unittest.skipUnless(HAS_FFMPEG, "requires ffmpeg/ffprobe")
 class TestLameDecoderVolumes(unittest.TestCase):
     def test_all_soundio_formats_decode_audible_tone(self):
         with tempfile.TemporaryDirectory(prefix="castty_lame_fmts_") as d:
@@ -535,7 +523,6 @@ class TestAudioLoopback(unittest.TestCase):
         self.assertAlmostEqual(mean_db, self.ref_mean, delta=2.0)
         self.assertAlmostEqual(max_db, self.ref_max, delta=2.0)
 
-    @unittest.skipUnless(HAS_LAME, "requires WITH_LAME")
     def test_stereo_mp3_capture(self):
         out_mp3 = os.path.join(self.tmpdir.name, "stereo.mp3")
         cast_path = os.path.join(self.tmpdir.name, "stereo_mp3.cast")
@@ -560,7 +547,6 @@ class TestAudioLoopback(unittest.TestCase):
         self.assertAlmostEqual(mean_db, self.ref_mean, delta=2.0)
         self.assertAlmostEqual(max_db, self.ref_max, delta=2.0)
 
-    @unittest.skipUnless(HAS_LAME, "requires WITH_LAME")
     def test_mono_mp3_capture(self):
         out_mp3 = os.path.join(self.tmpdir.name, "mono.mp3")
         cast_path = os.path.join(self.tmpdir.name, "mono_mp3.cast")
@@ -585,7 +571,6 @@ class TestAudioLoopback(unittest.TestCase):
         self.assertAlmostEqual(mean_db, self.ref_mean, delta=2.0)
         self.assertAlmostEqual(max_db, self.ref_max, delta=2.0)
 
-    @unittest.skipUnless(HAS_LAME, "requires WITH_LAME")
     def test_mute_silences_audio(self):
         out_mp3 = os.path.join(self.tmpdir.name, "muted.mp3")
         cast_path = os.path.join(self.tmpdir.name, "muted.cast")
@@ -607,7 +592,6 @@ class TestAudioLoopback(unittest.TestCase):
         _, max_db = probe_volume(["-ss", "0.3", "-i", out_mp3])
         self.assertLess(max_db, -40.0)
 
-    @unittest.skipUnless(HAS_LAME, "requires WITH_LAME")
     def test_pause_resume_and_mute_controls(self):
         out_mp3 = os.path.join(self.tmpdir.name, "ctrl.mp3")
         cast_path = os.path.join(self.tmpdir.name, "ctrl_audio.cast")
@@ -698,7 +682,6 @@ class TestAudioLoopback(unittest.TestCase):
         )
         self.assertLess(max_jump, 0.08, msg=f"Pop/step jump detected at raw splice: {max_jump}")
 
-    @unittest.skipUnless(HAS_LAME, "requires WITH_LAME")
     def test_append_mp3_validation_and_stereo_plus_mono_splice(self):
         # Invalid/non-MP3 file must fail cleanly without altering cast or audio.
         bad_mp3 = os.path.join(self.tmpdir.name, "not_mp3.mp3")

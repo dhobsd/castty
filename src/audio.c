@@ -11,9 +11,7 @@
 #include <unistd.h>
 
 #include <soundio/soundio.h>
-#ifdef WITH_LAME
 #include <lame/lame.h>
-#endif
 
 #include "castty.h"
 #include "audio/pcm.h"
@@ -151,7 +149,6 @@ write_zero_frames(struct audio_writer *aw, enum SoundIoFormat fmt,
 	free(zbuf);
 }
 
-#ifdef WITH_LAME
 static int
 probe_mp3_file(const char *path, int *rate_out, int *stereo_out, char *errbuf,
     size_t errsz)
@@ -464,7 +461,6 @@ prepare_mp3_append(void)
 
 	return pre_frames;
 }
-#endif
 
 static uint64_t
 prepare_raw_append(void)
@@ -887,13 +883,7 @@ audio_start(void)
 
 		if (ctx.append && stat(ctx.outpath, &st) == 0 && st.st_size > 0) {
 			if (mp3) {
-#ifdef WITH_LAME
 				pre_frames = prepare_mp3_append();
-#else
-				fprintf(stderr,
-				    "castty was not compiled with MP3 support\n");
-				exit(EXIT_FAILURE);
-#endif
 			} else {
 				pre_frames = prepare_raw_append();
 			}
@@ -976,7 +966,6 @@ audio_check_append(const char *outfile, char *errbuf, size_t errsz)
 		return 0;
 	}
 	if (mp3) {
-#ifdef WITH_LAME
 		int rate = 0, stereo = 0;
 
 		if (probe_mp3_file(outfile, &rate, &stereo, errbuf, errsz) != 0) {
@@ -985,11 +974,6 @@ audio_check_append(const char *outfile, char *errbuf, size_t errsz)
 		ctx.pref_rate = rate;
 		ctx.existing_stereo = stereo;
 		return 0;
-#else
-		snprintf(errbuf, errsz,
-		    "castty was not compiled with MP3 support");
-		return -1;
-#endif
 	} else {
 		FILE *fp = fopen(outfile, "r+b");
 

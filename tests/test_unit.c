@@ -16,7 +16,6 @@
 #include "cast.h"
 #include "json.h"
 
-#ifdef WITH_LAME
 static void
 put_u16le(unsigned char *p, uint16_t v)
 {
@@ -62,7 +61,6 @@ put_u64be(unsigned char *p, uint64_t v)
 	put_u32be(p, (uint32_t)(v >> 32));
 	put_u32be(p + 4, (uint32_t)v);
 }
-#endif
 
 static void
 test_json_escape(void)
@@ -264,7 +262,6 @@ test_cast_inspect(void)
 	unlink(path);
 }
 
-#ifdef WITH_LAME
 struct lame_fmt_case {
 	enum SoundIoFormat fmt;
 	int sample_bytes;
@@ -473,18 +470,12 @@ dump_lame_formats(const char *dir)
 	}
 	return 0;
 }
-#endif
 
 int
 main(int argc, char **argv)
 {
 	if (argc == 3 && strcmp(argv[1], "--dump-lame-formats") == 0) {
-#ifdef WITH_LAME
 		return dump_lame_formats(argv[2]);
-#else
-		(void)argv;
-		return 77;
-#endif
 	}
 
 	test_json_escape();
@@ -492,16 +483,8 @@ main(int argc, char **argv)
 	test_writer_raw();
 	test_pcm_roundtrip_and_fade();
 	test_cast_inspect();
-#ifdef WITH_LAME
 	test_writer_lame();
-#endif
 
-	printf("C unit tests passed (%s)\n",
-#ifdef WITH_LAME
-	    "WITH_LAME=yes"
-#else
-	    "WITH_LAME=no"
-#endif
-	);
+	printf("C unit tests passed\n");
 	return 0;
 }

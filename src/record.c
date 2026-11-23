@@ -151,7 +151,7 @@ static void
 usage(int status)
 {
 
-	fprintf(stderr, "usage: castty record [-123AacDdehlN" LAME_OPT "prt] [out.cast]\n"
+	fprintf(stderr, "usage: castty record [-123AacDdehlmNprt] [out.cast]\n"
 	    " -1             Output asciicast v1 format.\n"
 	    " -2             Output asciicast v2 format.\n"
 	    " -3             Output asciicast v3 format (default).\n"
@@ -163,9 +163,7 @@ usage(int status)
 	    " -e <cmd>       Execute <cmd> from the recorded shell session.\n"
 	    " -h             Show this help.\n"
 	    " -l             List available audio input devices and exit.\n"
-#ifdef WITH_LAME
 	    " -m             Encode audio to mp3 before writing.\n"
-#endif
 	    " -N             Disable terminal color/version probing.\n"
 	    " -p             Begin the recording in paused mode.\n"
 	    " -r <rows>      Use <rows> rows in the recorded shell session.\n"
@@ -198,7 +196,7 @@ record_main(int argc, char **argv)
 	exec_cmd = NULL;
 	no_probe = 0;
 
-	while ((ch = getopt(argc, argv, "?Aa:c:D:d:e:hlNpr:Rt:123" LAME_OPT)) != EOF) {
+	while ((ch = getopt(argc, argv, "?Aa:c:D:d:e:hlmNpr:Rt:123")) != EOF) {
 		char *e;
 
 		switch (ch) {

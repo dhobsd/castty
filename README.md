@@ -26,9 +26,7 @@ work. This is fixed in the [libsoundio repo](https://github.com/andrewrk/libsoun
 but you will have to build it yourself.
 
 CasTTY also depends on [LAME](http://lame.sourceforge.net/) (and in particular,
-libmp3lame) for on-the-fly MP3 encoding. It is possible to compile without LAME
-(and therefore without mp3 support) by modifying `config.mk` to contain 
-`WITH_LAME = no`.
+libmp3lame) for on-the-fly MP3 encoding and decoding.
 
 There are no UI build dependencies because I find that idea a little silly.
 
