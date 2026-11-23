@@ -1,5 +1,17 @@
+body {
+	margin: 8px;
+	-webkit-text-size-adjust: 100%;
+	text-size-adjust: 100%;
+}
+
 #controls {
 	background: #000;
+	display: flex;
+	align-items: center;
+	position: relative;
+	box-sizing: border-box;
+	min-height: 36px;
+	padding: 0 10px 0 2px;
 }
 
 #controls button {
@@ -7,21 +19,31 @@
 	background: none;
 	border: none;
 	font-size: 13pt;
-	height: 30px;
-	width: 30px;
-	margin: 0 7px 0 3px;
+	height: 36px;
+	width: 36px;
+	flex: 0 0 auto;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	margin: 0 6px 0 0;
 	padding: 0;
+	cursor: pointer;
+	touch-action: manipulation;
 }
 
 #controls button:focus {
 	outline: none;
 }
 
+#controls button:focus-visible {
+	outline: 2px solid #0f0;
+	outline-offset: -2px;
+}
+
 /* Override stock rangeslider.css chrome with CasTTY's slim progress bar */
 .rangeslider,
 .rangeslider__fill {
 	box-shadow: none;
-	top: 4px;
 }
 
 .rangeslider__handle {
@@ -29,12 +51,27 @@
 }
 
 .rangeslider--horizontal {
+	flex: 1 1 auto;
+	min-width: 0;
+	width: auto;
 	height: 5px;
-	margin: 8px 0 0 0;
-	float: right;
-	width: calc(100% - 40px);
+	top: 0;
+	margin: 0;
+	touch-action: none;
+	cursor: pointer;
 }
 
+/* Expand vertical hit area so the slim bar is easy to click or drag */
+.rangeslider--horizontal::after {
+	content: "";
+	position: absolute;
+	top: -15px;
+	bottom: -15px;
+	left: 0;
+	right: 0;
+}
+
+/* Keep read-only playback terminal from causing mobile scroll jumps or scrollbars */
 .xterm .xterm-viewport {
 	overflow-y: auto;
 }
@@ -42,4 +79,24 @@
 .xterm .xterm-helper-textarea {
 	left: 0;
 	pointer-events: none;
+}
+
+@media (pointer: coarse) {
+	#controls {
+		min-height: 44px;
+	}
+
+	#controls button {
+		height: 44px;
+		width: 44px;
+	}
+
+	.rangeslider--horizontal {
+		height: 8px;
+	}
+
+	.rangeslider--horizontal::after {
+		top: -18px;
+		bottom: -18px;
+	}
 }
