@@ -4,37 +4,15 @@
 		<meta charset="utf-8" />
 		<title></title>
 		<link rel="stylesheet" href="css/min.css" />
+		<link rel="stylesheet" href="css/player.css" />
 		<link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet">
-		<style>
-			#controls {
-				background: #000;
-			}
-			button {
-				color: #fff;
-				background: none;
-				border: none;
-				font-size: 13pt;
-				height: 30px;
-				width: 30px;
-				margin: 0 7px 0 3px;
-				padding: 0;
-			}
-			button:focus {
-			    outline: none;
-			}
-                        .rangeslider--horizontal {
-                                margin: 8px 0 0 0;
-                                float:right;
-                                width: calc(100% - 40px);
-                        }
-		</style>
 		<script src="js/min.js"></script>
 		<script src="js/player.js"></script>
 	</head>
 	<body>
 		<div id="container"></div>
 		<script>
-			$.ajaxSetup({"error":function(XMLHttpRequest,textStatus, errorThrown) {   
+			$.ajaxSetup({"error":function(XMLHttpRequest,textStatus, errorThrown) {
 				console.log(textStatus);
 				console.log(errorThrown);
 				console.log(XMLHttpRequest.responseText);
