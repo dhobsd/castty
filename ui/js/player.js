@@ -138,33 +138,126 @@ var player = function(audioFile, containerElem, events, termInfoOrOpts, maybeOpt
 		Player.toggle.html(icon).attr('aria-label', label);
 	};
 
-	/* Normalize asciicast v1, asciicast v2 (NDJSON), and legacy ttyrec (_tre/_ti) */
-	var normalizeEvents = function(rawEvents, info) {
+	var ANSI_COLOR_NAMES = [
+		'black', 'red', 'green', 'yellow',
+		'blue', 'magenta', 'cyan', 'white',
+		'brightBlack', 'brightRed', 'brightGreen', 'brightYellow',
+		'brightBlue', 'brightMagenta', 'brightCyan', 'brightWhite'
+	];
+
+	var parseCastTheme = function(rawTheme) {
+		if (!rawTheme || typeof rawTheme !== 'object') {
+			return null;
+		}
+		var colors = {};
+		if (rawTheme.fg) {
+			colors.foreground = rawTheme.fg;
+			colors.cursor = rawTheme.fg;
+		}
+		if (rawTheme.bg) {
+			colors.background = rawTheme.bg;
+			colors.cursorAccent = rawTheme.bg;
+		}
+		if (typeof rawTheme.palette === 'string' && rawTheme.palette) {
+			var parts = rawTheme.palette.split(':');
+			for (var i = 0; i < parts.length && i < ANSI_COLOR_NAMES.length; i++) {
+				if (parts[i]) {
+					colors[ANSI_COLOR_NAMES[i]] = parts[i];
+				}
+			}
+		}
+		if ($.isEmptyObject(colors)) {
+			return null;
+		}
+		return {
+			label: 'Recorded',
+			minContrast: 1,
+			colors: colors
+		};
+	};
+
+	/* Normalize asciicast v1, v2/v3 (NDJSON), and legacy ttyrec (_tre/_ti) */
+	var normalizeEvents = function(rawEvents, info, hasAudio) {
 		if (typeof rawEvents === 'string') {
 			var lines = rawEvents.split(/\r?\n/);
-			var header = {};
-			var v2Stdout = [];
+			var header = null;
+			var normEvents = [];
+			var markers = [];
 			var prevSec = 0;
+			var totalSec = 0;
+			var pendingDelta = 0;
+			var idleLimit = 0;
+			var isV3 = false;
+			var hasResize = false;
+
 			for (var i = 0; i < lines.length; i++) {
 				var line = $.trim(lines[i]);
-				if (!line) {
+				if (!line || line.charAt(0) === '#') {
 					continue;
 				}
 				var parsed = JSON.parse(line);
 				if (!$.isArray(parsed)) {
-					header = parsed;
-				} else if (parsed[1] === 'o') {
-					var tSec = Number(parsed[0]) || 0;
-					v2Stdout.push([Math.max(tSec - prevSec, 0), parsed[2]]);
-					prevSec = tSec;
+					if (!header) {
+						if (parsed && parsed.version === 1 && $.isArray(parsed.stdout)) {
+							return parsed;
+						}
+						header = parsed || {};
+						isV3 = header.version === 3;
+						idleLimit = Number(header.idle_time_limit) || 0;
+					}
+					continue;
+				}
+
+				var rawT = Number(parsed[0]) || 0;
+				var rawDt;
+				if (isV3) {
+					rawDt = Math.max(rawT, 0);
+				} else {
+					rawDt = Math.max(rawT - prevSec, 0);
+					prevSec = rawT;
+				}
+				var dt = (!hasAudio && idleLimit > 0) ?
+				    Math.min(rawDt, idleLimit) : rawDt;
+				totalSec += dt;
+				pendingDelta += dt;
+
+				var code = parsed[1];
+				var payload = parsed[2];
+				if (code === 'o') {
+					normEvents.push([pendingDelta, payload || '']);
+					pendingDelta = 0;
+				} else if (code === 'r' && typeof payload === 'string') {
+					var dims = payload.split('x');
+					var rCols = parseInt(dims[0], 10);
+					var rRows = parseInt(dims[1], 10);
+					if (rCols > 0 && rRows > 0) {
+						normEvents.push([pendingDelta, '', { resize: [rCols, rRows] }]);
+						pendingDelta = 0;
+						hasResize = true;
+					}
+				} else if (code === 'm') {
+					markers.push({ time: totalSec, label: payload || '' });
 				}
 			}
+
+			header = header || {};
+			var termMeta = (header.term && typeof header.term === 'object') ?
+			    header.term : {};
+			var envMeta = header.env;
+			if (!envMeta && termMeta.type) {
+				envMeta = { TERM: termMeta.type };
+			}
 			return {
-				width: header.width || (info && info.cols) || 80,
-				height: header.height || (info && info.rows) || 24,
-				duration: header.duration || prevSec,
-				env: header.env,
-				stdout: v2Stdout
+				version: header.version || 2,
+				width: termMeta.cols || header.width || (info && info.cols) || 80,
+				height: termMeta.rows || header.height || (info && info.rows) || 24,
+				duration: header.duration || totalSec,
+				env: envMeta,
+				term: header.term,
+				theme: termMeta.theme || header.theme,
+				markers: markers,
+				hasResize: hasResize,
+				stdout: normEvents
 			};
 		}
 
@@ -189,12 +282,26 @@ var player = function(audioFile, containerElem, events, termInfoOrOpts, maybeOpt
 	};
 
 	var init = function(audioFile, containerElem, events, termInfo, opts) {
-		events = normalizeEvents(events, termInfo);
+		events = normalizeEvents(events, termInfo, !!audioFile);
 		opts = opts || {};
 
 		var baseFontSize = 16;
 
-		Player.themes = THEMES;
+		var themes = $.extend({}, THEMES);
+		var themeOrder = THEME_ORDER.slice();
+		var recordedTheme = parseCastTheme(events.theme);
+		if (recordedTheme) {
+			themes['recorded'] = recordedTheme;
+			themeOrder.unshift('recorded');
+		}
+
+		Player.themes = themes;
+		Player.markers = events.markers || [];
+		Player.metadata = {
+			version: events.version || 1,
+			term: events.term || null,
+			env: events.env || null
+		};
 		Player.container = $(containerElem);
 		Player.container.css({
 			maxWidth: '100%',
@@ -232,7 +339,7 @@ var player = function(audioFile, containerElem, events, termInfoOrOpts, maybeOpt
 
 		Player.themeName = 'default';
 		Player.setTheme = function(themeOrName) {
-			var spec = typeof themeOrName === 'string' ? THEMES[themeOrName] : null;
+			var spec = typeof themeOrName === 'string' ? themes[themeOrName] : null;
 			if (spec) {
 				Player.themeName = themeOrName;
 				Player.term.options.minimumContrastRatio = spec.minContrast;
@@ -253,6 +360,9 @@ var player = function(audioFile, containerElem, events, termInfoOrOpts, maybeOpt
 		if (!initialTheme && window.matchMedia &&
 		    window.matchMedia('(prefers-contrast: more)').matches) {
 			initialTheme = 'high-contrast';
+		}
+		if (!initialTheme && recordedTheme) {
+			initialTheme = 'recorded';
 		}
 		Player.setTheme(initialTheme || 'default');
 
@@ -431,12 +541,44 @@ var player = function(audioFile, containerElem, events, termInfoOrOpts, maybeOpt
 			Player.timersRunning = 0;
 		};
 
+		var initialCols = events.width || 80;
+		var initialRows = events.height || 24;
+		var hasResizeEvents = !!events.hasResize;
+
+		var applyTermSize = function(cols, rows) {
+			if (!cols || !rows || (cols === Player.term.cols && rows === Player.term.rows)) {
+				return;
+			}
+			Player.term.resize(cols, rows);
+			baseWidth = 0;
+			baseHeight = 0;
+			Player.layout();
+		};
+
+		var writeSegment = function(str, resizeDims) {
+			if (resizeDims) {
+				var targetCols = resizeDims[0];
+				var targetRows = resizeDims[1];
+				Player.term.write(str, function() {
+					applyTermSize(targetCols, targetRows);
+				});
+			} else if (str.length > 0) {
+				Player.term.write(str);
+			}
+		};
+
 		var finishPlayback = function() {
 			if (Player.eventOff < Player.termEvents.length) {
 				var str = "";
 				while (Player.eventOff < Player.termEvents.length) {
-					str += Player.termEvents[Player.eventOff][1];
-					Player.pos += Player.termEvents[Player.eventOff][0];
+					var ev = Player.termEvents[Player.eventOff];
+					if (ev[2] && ev[2].resize) {
+						writeSegment(str, ev[2].resize);
+						str = "";
+					} else {
+						str += ev[1];
+					}
+					Player.pos += ev[0];
 					Player.eventOff++;
 				}
 				if (str.length > 0) {
@@ -464,26 +606,36 @@ var player = function(audioFile, containerElem, events, termInfoOrOpts, maybeOpt
 		Player.seekTo = function(t) {
 			var targetSec = t / 1000;
 			var back = Player.ended || targetSec < Player.pos;
-			var prefix = "";
+			var str = "";
 
 			if (back) {
 				/* Send RIS (ESC c) in-band so WriteBuffer resets in FIFO order */
-				prefix = "\x1bc";
+				if (hasResizeEvents) {
+					writeSegment("\x1bc", [initialCols, initialRows]);
+				} else {
+					str = "\x1bc";
+				}
 				Player.pos = 0;
 				Player.eventOff = 0;
 				Player.ended = 0;
 			}
 
 			var i = Player.eventOff;
-			var str = "";
 			while (i < Player.termEvents.length &&
 			    Player.pos + Player.termEvents[i][0] <= targetSec) {
-				str += Player.termEvents[i][1];
-				Player.pos += Player.termEvents[i++][0];
+				var ev = Player.termEvents[i];
+				if (ev[2] && ev[2].resize) {
+					writeSegment(str, ev[2].resize);
+					str = "";
+				} else {
+					str += ev[1];
+				}
+				Player.pos += ev[0];
+				i++;
 			}
 
-			if (prefix.length > 0 || str.length > 0) {
-				Player.term.write(prefix + str);
+			if (str.length > 0) {
+				Player.term.write(str);
 			}
 			Player.eventOff = i;
 
@@ -509,13 +661,24 @@ var player = function(audioFile, containerElem, events, termInfoOrOpts, maybeOpt
 			if (audioFile) {
 				while (Player.eventOff < Player.termEvents.length &&
 				    Player.behind()) {
-					str += Player.termEvents[Player.eventOff][1];
-					Player.pos += Player.termEvents[Player.eventOff][0];
+					var ev = Player.termEvents[Player.eventOff];
+					if (ev[2] && ev[2].resize) {
+						writeSegment(str, ev[2].resize);
+						str = "";
+					} else {
+						str += ev[1];
+					}
+					Player.pos += ev[0];
 					Player.eventOff++;
 				}
 			} else {
-				str = Player.termEvents[Player.eventOff][1];
-				Player.pos += Player.termEvents[Player.eventOff++][0];
+				var singleEv = Player.termEvents[Player.eventOff++];
+				if (singleEv[2] && singleEv[2].resize) {
+					writeSegment("", singleEv[2].resize);
+				} else {
+					str = singleEv[1];
+				}
+				Player.pos += singleEv[0];
 			}
 
 			if (str.length > 0) {
@@ -581,7 +744,11 @@ var player = function(audioFile, containerElem, events, termInfoOrOpts, maybeOpt
 			}
 
 			if (Player.ended) {
-				Player.term.write("\x1bc");
+				if (hasResizeEvents) {
+					writeSegment("\x1bc", [initialCols, initialRows]);
+				} else {
+					Player.term.write("\x1bc");
+				}
 				Player.seekUpdate = 1;
 				Player.seeker.val(0).change();
 				Player.seekUpdate = 0;
@@ -794,13 +961,13 @@ var player = function(audioFile, containerElem, events, termInfoOrOpts, maybeOpt
 			});
 		}
 
-		var initSpec = THEMES[Player.themeName] || THEMES['default'];
+		var initSpec = themes[Player.themeName] || themes['default'];
 		Player.themeToggle = $('<button id="themeToggle" type="button" aria-label="Theme: ' +
 		    initSpec.label + '. Click to switch">' + ICON_THEME + '</button>')
 		    .appendTo(Player.controls);
 		Player.themeToggle.on('click', function() {
-			var idx = $.inArray(Player.themeName, THEME_ORDER);
-			var nextName = THEME_ORDER[(idx + 1) % THEME_ORDER.length];
+			var idx = $.inArray(Player.themeName, themeOrder);
+			var nextName = themeOrder[(idx + 1) % themeOrder.length];
 			Player.setTheme(nextName);
 		});
 

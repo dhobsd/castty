@@ -73,7 +73,12 @@ inputproc(int masterfd, int controlfd)
 				}
 
 				if (cmd != CMD_NONE) {
-					xwrite(controlfd, &cmd, sizeof cmd);
+					struct control_msg msg = {
+						.cmd = cmd,
+						.rows = 0,
+						.cols = 0,
+					};
+					xwrite(controlfd, &msg, sizeof msg);
 				}
 
 				if (nread > 1) {
