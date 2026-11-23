@@ -17,6 +17,14 @@ var getTimeout = (function() {
 
 var player = function(audioFile, containerElem, events) {
 	var Player = {};
+	var ICON_PLAY = '<i class="material-icons" aria-hidden="true">&#xE037;</i>';
+	var ICON_PAUSE = '<i class="material-icons" aria-hidden="true">&#xE034;</i>';
+	var ICON_REPLAY = '<i class="material-icons" aria-hidden="true">&#xE042;</i>';
+	var ICON_LOADING = '<i class="material-icons" aria-hidden="true">&#xE88B;</i>';
+
+	var setToggleIcon = function(icon, label) {
+		Player.toggle.html(icon).attr('aria-label', label);
+	};
 
 	var init = function(audioFile, containerElem, events) {
 		Player.container = $(containerElem);
@@ -134,7 +142,7 @@ var player = function(audioFile, containerElem, events) {
 			Player.pos = 0;
 			Player.seekPos = 0;
 			Player.baseSeekPos = 0;
-			Player.toggle.html('<i class="material-icons">&#xE042;</i>');
+			setToggleIcon(ICON_REPLAY, 'Replay');
 		};
 
 		Player.seekTo = function(t) {
@@ -170,7 +178,7 @@ var player = function(audioFile, containerElem, events) {
 		};
 
 		Player.behind = function() {
-			return Player.pos + Player.termEvents[Player.eventOff][0] <
+			return Player.pos + Player.termEvents[Player.eventOff][0] <=
 			    Player.audio.currentTime;
 		};
 
@@ -237,62 +245,88 @@ var player = function(audioFile, containerElem, events) {
 			Player.seekerHandle = setTimeout(Player.updateSeeker, 100);
 		};
 
-		if (audioFile) {
-			Player.toggle = $('<button id="playToggle" disabled><i class="material-icons">&#xE88B;</i></button>')
-			    .appendTo(Player.controls);
-		} else {
-			Player.toggle = $('<button id="playToggle"><i class="material-icons">&#xE037;</i></button>')
-			    .appendTo(Player.controls);
-			Player.startable = 1;
-		}
+		/*
+		 * Enable Play immediately rather than waiting for canplaythrough:
+		 * mobile browsers defer audio buffering until audio.play() is called
+		 * synchronously inside a direct user tap handler.
+		 */
+		Player.toggle = $('<button id="playToggle" type="button" aria-label="Play">' +
+		    ICON_PLAY + '</button>').appendTo(Player.controls);
+		Player.startable = 1;
 
 		Player.paused = 1;
 		Player.ended = 0;
 		Player.pos = 0;
 		Player.toggle.click(function() {
-			if (Player.startable) {
-				if (Player.ended) {
-					Player.term.write("\x1bc");
-					Player.seekUpdate = 1;
-					Player.seeker.val(0).change();
-					Player.seekUpdate = 0;
-					Player.ended = 0;
-					Player.paused = 1;
-					Player.restarted = 1;
-					Player.pos = 0;
-					Player.eventOff = 0;
-					Player.rem = 0;
-					Player.seekPos = 0;
-					Player.baseSeekPos = 0;
-					if (audioFile && Player.audio.readyState > 0) {
-						try {
-							Player.audio.currentTime = 0;
-						} catch (e) {}
-					}
+			if (!Player.startable) {
+				return;
+			}
+
+			if (Player.ended) {
+				Player.term.write("\x1bc");
+				Player.seekUpdate = 1;
+				Player.seeker.val(0).change();
+				Player.seekUpdate = 0;
+				Player.ended = 0;
+				Player.paused = 1;
+				Player.restarted = 1;
+				Player.pos = 0;
+				Player.eventOff = 0;
+				Player.rem = 0;
+				Player.seekPos = 0;
+				Player.baseSeekPos = 0;
+				if (audioFile && Player.audio.readyState > 0) {
+					try {
+						Player.audio.currentTime = 0;
+					} catch (e) {}
 				}
+			}
 
-				if (Player.paused) {
-					Player.paused = 0;
-					Player.toggle.html('<i class="material-icons">&#xE034;</i>');
+			if (Player.paused) {
+				Player.paused = 0;
 
-					if (audioFile) {
-						Player.audio.play();
+				if (audioFile) {
+					if (Player.audio.readyState < 3) {
+						setToggleIcon(ICON_LOADING, 'Loading');
+					} else {
+						setToggleIcon(ICON_PAUSE, 'Pause');
 					}
 
-					startTimers();
+					var playPromise = Player.audio.play();
+					if (!Player.audio.paused && Player.audio.readyState >= 3) {
+						startTimers();
+					}
+
+					if (playPromise && typeof playPromise.then === 'function') {
+						playPromise.then(function() {
+							if (!Player.paused) {
+								setToggleIcon(ICON_PAUSE, 'Pause');
+								startTimers();
+							}
+						}, function() {
+							if (!Player.paused) {
+								stopTimers(true);
+								Player.paused = 1;
+								setToggleIcon(ICON_PLAY, 'Play');
+							}
+						});
+					}
 				} else {
-					if (audioFile) {
-						Player.audio.pause();
-					} else if (Player.timersRunning) {
-						Player.seekPos = Math.min(
-						    Player.baseSeekPos + (Date.now() - Player.start),
-						    Player.duration);
-					}
-
-					stopTimers(true);
-					Player.toggle.html('<i class="material-icons">&#xE037;</i>');
-					Player.paused = 1;
+					setToggleIcon(ICON_PAUSE, 'Pause');
+					startTimers();
 				}
+			} else {
+				if (audioFile) {
+					Player.audio.pause();
+				} else if (Player.timersRunning) {
+					Player.seekPos = Math.min(
+					    Player.baseSeekPos + (Date.now() - Player.start),
+					    Player.duration);
+				}
+
+				stopTimers(true);
+				setToggleIcon(ICON_PLAY, 'Play');
+				Player.paused = 1;
 			}
 		});
 
@@ -362,7 +396,7 @@ var player = function(audioFile, containerElem, events) {
 					Player.baseSeekPos = val;
 				}
 				if (wasEnded && !Player.ended && Player.paused) {
-					Player.toggle.html('<i class="material-icons">&#xE037;</i>');
+					setToggleIcon(ICON_PLAY, 'Play');
 				}
 				Player.seeking = 0;
 				if (Player.seekUnpause) {
@@ -376,9 +410,8 @@ var player = function(audioFile, containerElem, events) {
 
 		if (audioFile) {
 			Player.audio = new Audio(audioFile);
-			$(Player.audio).on('ended', function () {
-				finishPlayback();
-			});
+			Player.audio.preload = 'auto';
+			Player.audio.setAttribute('playsinline', '');
 
 			$(Player.audio).on('loadedmetadata durationchange', function() {
 				if (isFinite(Player.audio.duration) && Player.audio.duration > 0) {
@@ -392,17 +425,37 @@ var player = function(audioFile, containerElem, events) {
 				}
 			});
 
-			$(Player.audio).on('canplaythrough', function() {
-				Player.startable = 1;
-				if (!Player.restarted) {
-					Player.toggle.html('<i class="material-icons">&#xE037;</i>');
-				} else {
-					Player.restarted = 0;
+			$(Player.audio).on('playing', function() {
+				if (!Player.paused) {
+					if (Player.pendingSeek !== null && Player.audio.readyState > 0) {
+						try {
+							Player.audio.currentTime = Player.pendingSeek;
+							Player.pendingSeek = null;
+						} catch (e) {}
+					}
+					setToggleIcon(ICON_PAUSE, 'Pause');
+					startTimers();
 				}
-				Player.toggle.prop('disabled', false);
 			});
 
-			Player.audio.load();
+			$(Player.audio).on('waiting', function() {
+				if (!Player.paused) {
+					stopTimers(true);
+					setToggleIcon(ICON_LOADING, 'Loading');
+				}
+			});
+
+			$(Player.audio).on('error', function() {
+				if (!Player.paused) {
+					stopTimers(true);
+					Player.paused = 1;
+					setToggleIcon(ICON_PLAY, 'Play');
+				}
+			});
+
+			$(Player.audio).on('ended', function() {
+				finishPlayback();
+			});
 		}
 
 		return Player;
