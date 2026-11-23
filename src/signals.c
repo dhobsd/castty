@@ -14,6 +14,7 @@
 #include <unistd.h>
 
 #include "castty.h"
+#include "record.h"
 
 extern struct winsize owin, rwin, win;
 extern struct termios tt;
@@ -106,6 +107,16 @@ handle_sigwinch(int sig)
 		if (ioctl(masterfd, TIOCSWINSZ, &win) == -1) {
 			perror("ioctl(TIOCSWINSZ)");
 			exit(EXIT_FAILURE);
+		}
+
+		if (ctrl_write_fd != -1) {
+			struct control_msg msg = {
+				.cmd = CMD_RESIZE,
+				.rows = minrow,
+				.cols = mincol,
+			};
+			ssize_t wr = write(ctrl_write_fd, &msg, sizeof msg);
+			(void)wr;
 		}
 	}
 }
