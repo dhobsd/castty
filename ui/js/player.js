@@ -27,7 +27,7 @@ var player = function(audioFile, containerElem, events, termInfoOrOpts, maybeOpt
 	var ICON_FULLSCREEN = '<i class="material-icons" aria-hidden="true">&#xE5D0;</i>';
 	var ICON_FULLSCREEN_EXIT = '<i class="material-icons" aria-hidden="true">&#xE5D1;</i>';
 
-	var THEME_ORDER = ['default', 'high-contrast', 'light', 'vga'];
+	var THEME_ORDER = ['default', 'high-contrast', 'light', 'vga', 'rxvt', 'tango'];
 	var THEMES = {
 		'default': {
 			label: 'Default Dark',
@@ -117,6 +117,58 @@ var player = function(audioFile, containerElem, events, termInfoOrOpts, maybeOpt
 				brightMagenta: '#ff55ff',
 				brightCyan: '#55ffff',
 				brightWhite: '#ffffff'
+			}
+		},
+		'rxvt': {
+			label: 'rxvt (16-color)',
+			minContrast: 1,
+			colors: {
+				background: '#000000',
+				foreground: '#faebd7',
+				cursor: '#faebd7',
+				cursorAccent: '#000000',
+				black: '#000000',
+				red: '#cd0000',
+				green: '#00cd00',
+				yellow: '#cdcd00',
+				blue: '#0000cd',
+				magenta: '#cd00cd',
+				cyan: '#00cdcd',
+				white: '#faebd7',
+				brightBlack: '#404040',
+				brightRed: '#ff0000',
+				brightGreen: '#00ff00',
+				brightYellow: '#ffff00',
+				brightBlue: '#0000ff',
+				brightMagenta: '#ff00ff',
+				brightCyan: '#00ffff',
+				brightWhite: '#ffffff'
+			}
+		},
+		'tango': {
+			label: 'Tango Dark',
+			minContrast: 1,
+			colors: {
+				background: '#2e3436',
+				foreground: '#d3d7cf',
+				cursor: '#d3d7cf',
+				cursorAccent: '#2e3436',
+				black: '#2e3436',
+				red: '#cc0000',
+				green: '#4e9a06',
+				yellow: '#c4a000',
+				blue: '#3465a4',
+				magenta: '#75507b',
+				cyan: '#06989a',
+				white: '#d3d7cf',
+				brightBlack: '#555753',
+				brightRed: '#ef2929',
+				brightGreen: '#8ae234',
+				brightYellow: '#fce94f',
+				brightBlue: '#729fcf',
+				brightMagenta: '#ad7fa8',
+				brightCyan: '#34e2e2',
+				brightWhite: '#eeeeec'
 			}
 		}
 	};
@@ -356,15 +408,49 @@ var player = function(audioFile, containerElem, events, termInfoOrOpts, maybeOpt
 			}
 		};
 
-		var initialTheme = opts.theme;
-		if (!initialTheme && window.matchMedia &&
-		    window.matchMedia('(prefers-contrast: more)').matches) {
-			initialTheme = 'high-contrast';
-		}
-		if (!initialTheme && recordedTheme) {
-			initialTheme = 'recorded';
-		}
-		Player.setTheme(initialTheme || 'default');
+		var resolveAutoTheme = function() {
+			if (opts.theme) {
+				return opts.theme;
+			}
+			if (window.matchMedia &&
+			    window.matchMedia('(prefers-contrast: more)').matches) {
+				return 'high-contrast';
+			}
+			if (recordedTheme) {
+				return 'recorded';
+			}
+
+			var env = events.env || {};
+			var colorfgbg = typeof env.COLORFGBG === 'string' ?
+			    env.COLORFGBG : '';
+			if (colorfgbg) {
+				var fgbgParts = colorfgbg.split(';');
+				var bgIdx = parseInt(fgbgParts[fgbgParts.length - 1], 10);
+				if (bgIdx === 7 || bgIdx === 15) {
+					return 'light';
+				}
+			}
+
+			var termMeta = events.term || {};
+			var termVer = typeof termMeta.version === 'string' ?
+			    termMeta.version.toLowerCase() : '';
+			var termProg = typeof env.TERM_PROGRAM === 'string' ?
+			    env.TERM_PROGRAM.toLowerCase() : '';
+			var termType = (termMeta.type || env.TERM || '').toLowerCase();
+
+			if (/^(linux|cons25|pc3|ansi|vt100|vt102|vt220|cygwin|putty|eterm)/.test(termType)) {
+				return 'vga';
+			}
+			if (/^rxvt/.test(termType)) {
+				return 'rxvt';
+			}
+			if (termVer.indexOf('vte(') === 0 || termProg === 'gnome-terminal') {
+				return 'tango';
+			}
+			return 'default';
+		};
+
+		Player.setTheme(resolveAutoTheme());
 
 		var screenEl = Player.term.element ?
 		    Player.term.element.querySelector('.xterm-screen') : null;

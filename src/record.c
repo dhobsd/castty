@@ -16,6 +16,7 @@
 #include "audio.h"
 #include "castty.h"
 #include "record.h"
+#include "term.h"
 
 extern char **environ;
 
@@ -44,69 +45,13 @@ set_raw_input(void)
 }
 
 static char *
-escape(const char *from)
-{
-	unsigned char c;
-	size_t i, o, len;
-	char *p;
-
-	assert(from);
-
-	len = strlen(from);
-	p = malloc(len * 6 + 1);
-	if (p == NULL) {
-		perror("malloc");
-		exit(EXIT_FAILURE);
-	}
-
-	for (i = 0, o = 0; i < len; i++) {
-		c = (unsigned char)from[i];
-		switch (c) {
-		case '\\':
-		case '"':
-			p[o++] = '\\';
-			p[o++] = (char)c;
-			break;
-		case '\b':
-			p[o++] = '\\';
-			p[o++] = 'b';
-			break;
-		case '\f':
-			p[o++] = '\\';
-			p[o++] = 'f';
-			break;
-		case '\n':
-			p[o++] = '\\';
-			p[o++] = 'n';
-			break;
-		case '\r':
-			p[o++] = '\\';
-			p[o++] = 'r';
-			break;
-		case '\t':
-			p[o++] = '\\';
-			p[o++] = 't';
-			break;
-		default:
-			if (c < 0x20) {
-				o += sprintf(&p[o], "\\u%04x", c);
-			} else {
-				p[o++] = (char)c;
-			}
-			break;
-		}
-	}
-
-	p[o] = '\0';
-
-	return p;
-}
-
-static char *
 serialize_env(void)
 {
 	static const char *interesting[] = {
 		"TERM",
+		"TERM_PROGRAM",
+		"COLORTERM",
+		"COLORFGBG",
 		"SHELL",
 		"PS1",
 		"PS2",
@@ -148,7 +93,7 @@ serialize_env(void)
 			continue;
 		}
 
-		v = escape(eq + 1);
+		v = json_escape(eq + 1);
 
 		l = strlen(k) + strlen(v);
 		/* 7 is for two sets of quotes, a colon, a comma, and a 0 byte */
@@ -189,7 +134,7 @@ static void
 usage(int status)
 {
 
-	fprintf(stderr, "usage: castty record [-123acDdehl" LAME_OPT "prt] [out.cast]\n"
+	fprintf(stderr, "usage: castty record [-123acDdehlN" LAME_OPT "prt] [out.cast]\n"
 	    " -1             Output asciicast v1 format.\n"
 	    " -2             Output asciicast v2 format.\n"
 	    " -3             Output asciicast v3 format (default).\n"
@@ -203,6 +148,7 @@ usage(int status)
 #ifdef WITH_LAME
 	    " -m             Encode audio to mp3 before writing.\n"
 #endif
+	    " -N             Disable terminal color/version probing.\n"
 	    " -p             Begin the recording in paused mode.\n"
 	    " -r <rows>      Use <rows> rows in the recorded shell session.\n"
 	    " -R             Use a raw sound device.\n"
@@ -216,22 +162,25 @@ usage(int status)
 int
 record_main(int argc, char **argv)
 {
-	int ch, controlfd[2];
+	int ch, controlfd[2], no_probe;
 	extern char *optarg;
 	extern int optind;
 	struct outargs oa;
+	struct term_probe probe;
 	char *exec_cmd, *term;
 
 	memset(&oa, 0, sizeof oa);
+	memset(&probe, 0, sizeof probe);
 	oa.env = serialize_env();
 	term = getenv("TERM");
 	if (term && *term) {
-		oa.term_type = escape(term);
+		oa.term_type = json_escape(term);
 	}
 	oa.timestamp = time(NULL);
 	exec_cmd = NULL;
+	no_probe = 0;
 
-	while ((ch = getopt(argc, argv, "?a:c:D:d:e:hlpr:Rt:123" LAME_OPT)) != EOF) {
+	while ((ch = getopt(argc, argv, "?a:c:D:d:e:hlNpr:Rt:123" LAME_OPT)) != EOF) {
 		char *e;
 
 		switch (ch) {
@@ -255,7 +204,7 @@ record_main(int argc, char **argv)
 			break;
 		case 'e':
 			exec_cmd = strdup(optarg);
-			oa.cmd = escape(exec_cmd);
+			oa.cmd = json_escape(exec_cmd);
 			break;
 		case 'l':
 			audio_list_inputs();
@@ -263,6 +212,9 @@ record_main(int argc, char **argv)
 			break;
 		case 'm':
 			audio_toggle_mp3();
+			break;
+		case 'N':
+			no_probe = 1;
 			break;
 		case 'p':
 			oa.start_paused = 1;
@@ -289,7 +241,7 @@ record_main(int argc, char **argv)
 			oa.use_raw = 1;
 			break;
 		case 't':
-			oa.title = escape(optarg);
+			oa.title = json_escape(optarg);
 			break;
 		case 'h':
 		case '?':
@@ -354,6 +306,12 @@ record_main(int argc, char **argv)
 
 	set_raw_input();
 
+	if (!no_probe && oa.format_version >= 2) {
+		term_probe_tty(STDIN_FILENO, STDOUT_FILENO, term, &probe);
+		oa.term_version = probe.version;
+		oa.theme_json = probe.theme_json;
+	}
+
 	child = fork();
 	if (child < 0) {
 		perror("fork");
@@ -413,6 +371,7 @@ record_main(int argc, char **argv)
 	}
 
 	xtcsetattr(STDIN_FILENO, TCSAFLUSH, &tt);
+	term_probe_free(&probe);
 
 	return 0;
 }
