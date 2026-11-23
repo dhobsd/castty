@@ -38,3 +38,8 @@
 .xterm .xterm-viewport {
 	overflow-y: auto;
 }
+
+.xterm .xterm-helper-textarea {
+	left: 0;
+	pointer-events: none;
+}
