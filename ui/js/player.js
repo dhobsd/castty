@@ -73,8 +73,68 @@ var player = function(audioFile, containerElem, events) {
 		Player.eventOff = 0;
 		Player.rem = 0;
 		Player.timerHandle = undefined;
+		Player.seekerHandle = undefined;
+		Player.timersRunning = 0;
 
 		Player.playTime = 0;
+		Player.seekPos = 0;
+		Player.baseSeekPos = 0;
+
+		var startTimers = function() {
+			if (Player.timersRunning || Player.paused) {
+				return;
+			}
+			Player.timersRunning = 1;
+			Player.start = Date.now();
+			Player.baseSeekPos = Player.seekPos;
+			Player.timerHandle = setTimeout(Player.nextEvent, Player.rem);
+			Player.seekerHandle = setTimeout(Player.updateSeeker, 100);
+		};
+
+		var stopTimers = function(saveRemaining) {
+			if (Player.seekerHandle) {
+				clearTimeout(Player.seekerHandle);
+				Player.seekerHandle = undefined;
+			}
+			if (Player.timerHandle) {
+				if (saveRemaining) {
+					var rem = getTimeout(Player.timerHandle);
+					Player.rem = isNaN(rem) ? 0 : rem;
+				}
+				clearTimeout(Player.timerHandle);
+				Player.timerHandle = undefined;
+			}
+			Player.timersRunning = 0;
+		};
+
+		var finishPlayback = function() {
+			if (Player.eventOff < Player.termEvents.length) {
+				var str = "";
+				while (Player.eventOff < Player.termEvents.length) {
+					str += Player.termEvents[Player.eventOff][1];
+					Player.pos += Player.termEvents[Player.eventOff][0];
+					Player.eventOff++;
+				}
+				if (str.length > 0) {
+					Player.term.write(str);
+				}
+			}
+
+			stopTimers(false);
+
+			Player.seekUpdate = 1;
+			Player.seeker.val(Player.duration).change();
+			Player.seekUpdate = 0;
+
+			Player.ended = 1;
+			Player.paused = 1;
+			Player.rem = 0;
+			Player.eventOff = 0;
+			Player.pos = 0;
+			Player.seekPos = 0;
+			Player.baseSeekPos = 0;
+			Player.toggle.html('<i class="material-icons">&#xE042;</i>');
+		};
 
 		Player.seekTo = function(t) {
 			var back = Player.eventOff &&
@@ -109,6 +169,12 @@ var player = function(audioFile, containerElem, events) {
 		};
 
 		Player.nextEvent = function() {
+			Player.timerHandle = undefined;
+			Player.rem = 0;
+			if (Player.paused || Player.eventOff >= Player.termEvents.length) {
+				return;
+			}
+
 			var str = "";
 			if (audioFile) {
 				while (Player.eventOff < Player.termEvents.length &&
@@ -122,31 +188,45 @@ var player = function(audioFile, containerElem, events) {
 				Player.pos += Player.termEvents[Player.eventOff++][0];
 			}
 
-			Player.term.write(str);
+			if (str.length > 0) {
+				Player.term.write(str);
+			}
 
 			if (Player.eventOff < Player.termEvents.length) {
+				var delay;
 				if (audioFile) {
-					Player.timerHandle = setTimeout(Player.nextEvent,
-					    ((Player.pos + Player.termEvents[Player.eventOff][0]) -
-					    Player.audio.currentTime) * 1000);
+					delay = ((Player.pos + Player.termEvents[Player.eventOff][0]) -
+					    Player.audio.currentTime) * 1000;
 				} else {
-					Player.timerHandle = setTimeout(Player.nextEvent,
-					    Player.termEvents[Player.eventOff][0] * 1000);
+					delay = Player.termEvents[Player.eventOff][0] * 1000;
 				}
+				Player.timerHandle = setTimeout(Player.nextEvent, Math.max(delay, 0));
 			}
 		};
 
-		Player.seekPos = 0;
 		Player.updateSeeker = function() {
+			Player.seekerHandle = undefined;
+			if (Player.paused) {
+				return;
+			}
+
 			Player.seekUpdate = 1;
 			if (audioFile) {
-				Player.seeker.val(100 + Player.audio.currentTime * 1000 +
-				    ((Player.audio.currentTime * 1000) % 100)).change();
+				var curMs = Player.audio.currentTime * 1000;
+				Player.seeker.val(Math.min(curMs, Player.duration)).change();
 			} else {
-				Player.seekPos += 100;
+				Player.seekPos = Math.min(
+				    Player.baseSeekPos + (Date.now() - Player.start),
+				    Player.duration);
 				Player.seeker.val(Player.seekPos).change();
 			}
 			Player.seekUpdate = 0;
+
+			if (!audioFile && Player.seekPos >= Player.duration &&
+			    Player.eventOff >= Player.termEvents.length) {
+				finishPlayback();
+				return;
+			}
 
 			Player.seekerHandle = setTimeout(Player.updateSeeker, 100);
 		};
@@ -174,35 +254,31 @@ var player = function(audioFile, containerElem, events) {
 					Player.paused = 1;
 					Player.restarted = 1;
 					Player.pos = 0;
+					Player.eventOff = 0;
+					Player.rem = 0;
+					Player.seekPos = 0;
+					Player.baseSeekPos = 0;
 				}
 
 				if (Player.paused) {
 					Player.paused = 0;
 					Player.toggle.html('<i class="material-icons">&#xE034;</i>');
-					Player.start = Date.now();
 
 					if (audioFile) {
 						Player.audio.play();
 					}
 
-					Player.timerHandle =
-					    setTimeout(Player.nextEvent, Player.rem);
-					Player.seekerHandle =
-					    setTimeout(Player.updateSeeker, 100);
+					startTimers();
 				} else {
 					if (audioFile) {
 						Player.audio.pause();
+					} else if (Player.timersRunning) {
+						Player.seekPos = Math.min(
+						    Player.baseSeekPos + (Date.now() - Player.start),
+						    Player.duration);
 					}
 
-					if (Player.seekerHandle) {
-						clearTimeout(Player.seekerHandle);
-					}
-
-					if (Player.timerHandle) {
-						Player.rem =
-						    getTimeout(Player.timerHandle);
-						clearTimeout(Player.timerHandle);
-					}
+					stopTimers(true);
 					Player.toggle.html('<i class="material-icons">&#xE037;</i>');
 					Player.paused = 1;
 				}
@@ -210,8 +286,9 @@ var player = function(audioFile, containerElem, events) {
 		});
 
 		Player.duration = events.duration * 1000;
+		var step = Player.duration > 0 ? Player.duration / 1000 : 1;
 		Player.seeker = $('<input type="range" min="0" max="' +
-		    Player.duration + '" step="' + Player.duration / 1000 +
+		    Player.duration + '" step="' + step +
 		    '" value="0">').appendTo(Player.controls);
 
 		Player.maxSeek = 0;
@@ -245,12 +322,13 @@ var player = function(audioFile, containerElem, events) {
 					Player.seeker.val(val).change();
 				}
 
-				clearTimeout(Player.timerHandle);
+				stopTimers(false);
 				Player.rem = Player.seekTo(val);
 				if (audioFile) {
 					Player.audio.currentTime = val / 1000;
 				} else {
 					Player.seekPos = val;
+					Player.baseSeekPos = val;
 				}
 				Player.seeking = 0;
 			}
@@ -259,20 +337,7 @@ var player = function(audioFile, containerElem, events) {
 		if (audioFile) {
 			Player.audio = new Audio(audioFile);
 			$(Player.audio).on('ended', function () {
-				Player.seekUpdate = 1;
-				Player.seeker.val(Player.duration).change();
-				Player.seekUpdate = 0;
-
-				Player.ended = 1;
-				Player.paused = 1;
-				Player.rem = 0;
-				Player.eventOff = 0;
-				Player.toggle.html('<i class="material-icons">&#xE042;</i>');
-
-				clearTimeout(Player.timerHandle);
-				clearTimeout(Player.seekerHandle);
-				Player.timerHandle = undefined;
-				Player.seekerHandle = undefined;
+				finishPlayback();
 			});
 
 			$(Player.audio).on('durationchange', function() {
@@ -289,9 +354,8 @@ var player = function(audioFile, containerElem, events) {
 				Player.toggle.prop('disabled', false);
 			});
 
+			Player.audio.load();
 		}
-
-		Player.audio.load();
 
 		return Player;
 	};
