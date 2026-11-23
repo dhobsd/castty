@@ -27,6 +27,7 @@ FILE *debug_out;
 int masterfd;
 pid_t child;
 volatile sig_atomic_t ctrl_write_fd = -1;
+volatile sig_atomic_t sigchld_write_fd = -1;
 volatile sig_atomic_t tty_saved = 0;
 
 void
@@ -177,7 +178,7 @@ usage(int status)
 int
 record_main(int argc, char **argv)
 {
-	int ch, controlfd[2], no_probe;
+	int ch, controlfd[2], sigchld_pipe[2], no_probe;
 	extern char *optarg;
 	extern int optind;
 	struct outargs oa;
@@ -293,6 +294,18 @@ record_main(int argc, char **argv)
 	}
 	oa.controlfd = controlfd[0];
 
+	if (pipe(sigchld_pipe) != 0) {
+		perror("pipe");
+		exit(EXIT_FAILURE);
+	}
+	if (fcntl(sigchld_pipe[0], F_SETFD, FD_CLOEXEC) != 0 ||
+	    fcntl(sigchld_pipe[1], F_SETFD, FD_CLOEXEC) != 0 ||
+	    fcntl(sigchld_pipe[0], F_SETFL, O_NONBLOCK) != 0 ||
+	    fcntl(sigchld_pipe[1], F_SETFL, O_NONBLOCK) != 0) {
+		perror("fcntl");
+		exit(EXIT_FAILURE);
+	}
+
 	xtcgetattr(STDIN_FILENO, &tt);
 
 	oa.masterfd = masterfd = posix_openpt(O_RDWR | O_NOCTTY);
@@ -329,8 +342,10 @@ record_main(int argc, char **argv)
 		oa.theme_json = probe.theme_json;
 	}
 
+	sigchld_write_fd = sigchld_pipe[1];
 	child = fork();
 	if (child < 0) {
+		sigchld_write_fd = -1;
 		perror("fork");
 		exit(EXIT_FAILURE);
 	}
@@ -338,7 +353,10 @@ record_main(int argc, char **argv)
 	if (child == 0) {
 		struct sigaction dfl;
 
+		sigchld_write_fd = -1;
 		tty_saved = 0;
+		xclose(sigchld_pipe[0]);
+		xclose(sigchld_pipe[1]);
 
 		memset(&dfl, 0, sizeof dfl);
 		(void)sigemptyset(&dfl.sa_mask);
@@ -381,8 +399,11 @@ record_main(int argc, char **argv)
 
 	xclose(controlfd[0]);
 	ctrl_write_fd = controlfd[1];
-	inputproc(masterfd, controlfd[1]);
+	inputproc(masterfd, controlfd[1], sigchld_pipe[0]);
 	ctrl_write_fd = -1;
+	sigchld_write_fd = -1;
+	xclose(sigchld_pipe[0]);
+	xclose(sigchld_pipe[1]);
 	xclose(controlfd[1]);
 
 	signal(SIGWINCH, SIG_DFL);
