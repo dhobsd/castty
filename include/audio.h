@@ -2,6 +2,7 @@
 #define AUDIO_H
 
 #include <stddef.h>
+#include <stdint.h>
 
 enum audio_format {
 	AUDIO_FMT_AUTO = 0,
@@ -14,7 +15,22 @@ enum audio_format {
 	AUDIO_FMT_M4A,
 };
 
+struct audio_vu {
+	float rms_l;
+	float rms_r;
+	float peak_l;
+	float peak_r;
+	int clipped;
+	int muted;
+	int stereo;
+	int active;
+	uint64_t seq;
+};
+
 double audio_clock_ms(void);
+void audio_get_vu(struct audio_vu *out);
+int audio_is_muted(void);
+const char *audio_active_format_name(void);
 void audio_exit(void);
 void audio_list_inputs(void);
 void audio_mute(void);

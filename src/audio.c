@@ -84,6 +84,9 @@ static struct audio_ctx {
 	char *outpath;
 	char *tmp_path;
 	atomic_uint_fast64_t clock_frames;
+	atomic_uint_fast64_t vu_packed;
+	atomic_uint_fast64_t vu_seq;
+	atomic_int vu_running;
 	double base_clock_ms;
 	double target_cast_ms;
 	atomic_int sample_rate;
@@ -902,6 +905,30 @@ audio_clock_ms(void)
 	return ctx.base_clock_ms + ((double)frames * 1000.0) / (double)rate;
 }
 
+static uint16_t
+vu_quantize(float v)
+{
+	if (v <= 0.0f) {
+		return 0;
+	}
+	if (v >= 1.0f) {
+		return 32767;
+	}
+	return (uint16_t)(v * 32767.0f + 0.5f);
+}
+
+static uint64_t
+vu_pack(float rms_l, float rms_r, float peak_l, float peak_r, int clip,
+    int stereo)
+{
+	return ((uint64_t)vu_quantize(rms_l)) |
+	    ((uint64_t)vu_quantize(rms_r) << 15) |
+	    ((uint64_t)vu_quantize(peak_l) << 30) |
+	    ((uint64_t)vu_quantize(peak_r) << 45) |
+	    ((uint64_t)(clip ? 1 : 0) << 60) |
+	    ((uint64_t)(stereo ? 1 : 0) << 61);
+}
+
 static void
 audio_record(struct SoundIoInStream *stream, int min_frames, int max_frames)
 {
@@ -944,6 +971,9 @@ audio_record(struct SoundIoInStream *stream, int min_frames, int max_frames)
 	int to_write = MIN(nfree, max_frames);
 	int remaining = to_write;
 	int written_frames = 0;
+	double sum_sq_l = 0.0, sum_sq_r = 0.0;
+	float max_l = 0.0f, max_r = 0.0f;
+	int clipped = 0;
 
 	while (remaining > 0 && remaining >= min_frames) {
 		int nframe = remaining;
@@ -961,16 +991,37 @@ audio_record(struct SoundIoInStream *stream, int min_frames, int max_frames)
 			buf += (size_t)nframe * frame_bytes;
 		} else {
 			for (int frame = 0; frame < nframe; frame++) {
+				float sl = pcm_decode_sample(ctx.format,
+				    (const unsigned char *)areas[0].ptr) / 32768.0f;
+				float sr, al, ar;
+
 				memcpy(buf, areas[0].ptr, sample_bytes);
 				buf += sample_bytes;
 				if (ctx.mono) {
 					memcpy(buf, areas[0].ptr, sample_bytes);
+					sr = sl;
 				} else {
+					sr = pcm_decode_sample(ctx.format,
+					    (const unsigned char *)areas[1].ptr) / 32768.0f;
 					memcpy(buf, areas[1].ptr, sample_bytes);
 					areas[1].ptr += areas[1].step;
 				}
 				buf += sample_bytes;
 				areas[0].ptr += areas[0].step;
+
+				al = fabsf(sl);
+				ar = fabsf(sr);
+				if (al > max_l) {
+					max_l = al;
+				}
+				if (ar > max_r) {
+					max_r = ar;
+				}
+				if (al >= 0.99f || ar >= 0.99f) {
+					clipped = 1;
+				}
+				sum_sq_l += (double)sl * (double)sl;
+				sum_sq_r += (double)sr * (double)sr;
 			}
 		}
 
@@ -984,11 +1035,64 @@ audio_record(struct SoundIoInStream *stream, int min_frames, int max_frames)
 	}
 
 	if (written_frames > 0) {
+		float rl = (!is_muted) ?
+		    sqrtf((float)(sum_sq_l / (double)written_frames)) : 0.0f;
+		float rr = (!is_muted) ?
+		    sqrtf((float)(sum_sq_r / (double)written_frames)) : 0.0f;
+		uint64_t packed = vu_pack(rl, rr, max_l, max_r, clipped,
+		    !ctx.mono);
+
+		atomic_store_explicit(&ctx.vu_packed, packed,
+		    memory_order_relaxed);
+		atomic_fetch_add_explicit(&ctx.vu_seq, 1, memory_order_release);
+
 		soundio_ring_buffer_advance_write_ptr(ctx.rb,
 		    written_frames * frame_bytes);
 		atomic_fetch_add_explicit(&ctx.clock_frames,
 		    (uint_fast64_t)written_frames, memory_order_release);
 	}
+}
+
+void
+audio_get_vu(struct audio_vu *out)
+{
+	uint64_t seq, packed;
+
+	if (out == NULL) {
+		return;
+	}
+	memset(out, 0, sizeof *out);
+	out->active = atomic_load_explicit(&ctx.vu_running,
+	    memory_order_acquire);
+	out->muted = atomic_load_explicit(&muted, memory_order_relaxed);
+	if (!out->active) {
+		return;
+	}
+
+	seq = atomic_load_explicit(&ctx.vu_seq, memory_order_acquire);
+	packed = atomic_load_explicit(&ctx.vu_packed, memory_order_relaxed);
+	out->seq = seq;
+	out->rms_l = (float)(packed & 0x7fffu) / 32767.0f;
+	out->rms_r = (float)((packed >> 15) & 0x7fffu) / 32767.0f;
+	out->peak_l = (float)((packed >> 30) & 0x7fffu) / 32767.0f;
+	out->peak_r = (float)((packed >> 45) & 0x7fffu) / 32767.0f;
+	out->clipped = (int)((packed >> 60) & 1u);
+	out->stereo = (int)((packed >> 61) & 1u);
+}
+
+int
+audio_is_muted(void)
+{
+	return atomic_load_explicit(&muted, memory_order_relaxed);
+}
+
+const char *
+audio_active_format_name(void)
+{
+	if (!ctx.active) {
+		return "none";
+	}
+	return audio_format_name(ctx.afmt);
 }
 
 void
@@ -1158,6 +1262,8 @@ audio_start(void)
 	atomic_store_explicit(&ctx.sample_rate, ctx.stream->sample_rate,
 	    memory_order_release);
 	atomic_store_explicit(&ctx.clock_frames, 0, memory_order_release);
+	atomic_store_explicit(&ctx.vu_packed, 0, memory_order_relaxed);
+	atomic_store_explicit(&ctx.vu_running, 1, memory_order_release);
 	atomic_store_explicit(&overflowed, 0, memory_order_relaxed);
 	atomic_store_explicit(&read_err, 0, memory_order_relaxed);
 
@@ -1315,6 +1421,9 @@ audio_init_append(const char *devid, const char *outfile, int use_raw,
 	ctx.fade_in_pos = 0;
 	atomic_init(&ctx.clock_frames, 0);
 	atomic_init(&ctx.sample_rate, 0);
+	atomic_init(&ctx.vu_packed, 0);
+	atomic_init(&ctx.vu_seq, 0);
+	atomic_init(&ctx.vu_running, 0);
 	free(ctx.outpath);
 	ctx.outpath = strdup(outfile);
 	if (ctx.outpath == NULL) {
@@ -1351,6 +1460,9 @@ audio_stop(void)
 		return;
 	}
 
+	atomic_store_explicit(&ctx.vu_running, 0, memory_order_release);
+	atomic_store_explicit(&ctx.vu_packed, 0, memory_order_relaxed);
+
 	if (ctx.stream) {
 		soundio_instream_destroy(ctx.stream);
 		ctx.stream = NULL;
@@ -1362,6 +1474,8 @@ audio_stop(void)
 		ctx.base_clock_ms += ((double)frames * 1000.0) / (double)rate;
 	}
 	atomic_store_explicit(&ctx.clock_frames, 0, memory_order_release);
+	atomic_store_explicit(&ctx.vu_packed, 0, memory_order_relaxed);
+	atomic_store_explicit(&ctx.vu_running, 1, memory_order_release);
 
 	atomic_store_explicit(&stopping, 1, memory_order_release);
 	pthread_join(wthread, NULL);
@@ -1378,6 +1492,8 @@ audio_exit(void)
 	if (ctx.started) {
 		audio_stop();
 	}
+	atomic_store_explicit(&ctx.vu_running, 0, memory_order_release);
+	atomic_store_explicit(&ctx.vu_packed, 0, memory_order_relaxed);
 	ctx.active = 0;
 
 	if (ctx.aw) {
