@@ -15,6 +15,7 @@
 #include "audio/writer-lame.h"
 #include "audio.h"
 #include "castty.h"
+#include "json.h"
 #include "record.h"
 #include "term.h"
 
