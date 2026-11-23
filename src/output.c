@@ -219,6 +219,12 @@ outputproc(struct outargs *oa)
 		if (oa->term_type && *oa->term_type) {
 			fprintf(evout, ", \"type\": \"%s\"", oa->term_type);
 		}
+		if (oa->term_version && *oa->term_version) {
+			fprintf(evout, ", \"version\": \"%s\"", oa->term_version);
+		}
+		if (oa->theme_json && *oa->theme_json) {
+			fprintf(evout, ", \"theme\": %s", oa->theme_json);
+		}
 		fprintf(evout, "}, \"timestamp\": %lld", (long long)oa->timestamp);
 		if (oa->cmd && *oa->cmd) {
 			fprintf(evout, ", \"command\": \"%s\"", oa->cmd);
@@ -245,6 +251,9 @@ outputproc(struct outargs *oa)
 		    oa->title ? oa->title : "",
 		    oa->env
 		);
+		if (oa->format_version == 2 && oa->theme_json && *oa->theme_json) {
+			fprintf(evout, ", \"theme\": %s", oa->theme_json);
+		}
 		if (oa->format_version == 2) {
 			// v2 header finished here, data will be appended in separate lines
 			fprintf(evout, "}\n");
