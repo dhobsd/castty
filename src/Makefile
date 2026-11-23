@@ -15,7 +15,7 @@ LDFLAGS = -O2 -L/usr/local/lib
 LDLIBS = -lsoundio -lmp3lame -lsndfile -lavformat -lavcodec -lavutil -lvterm -lpthread -lm
 
 TARGET := castty
-OBJ := audio.o cast.o castty.o input.o json.o output.o record.o shell.o signals.o term.o xwrap.o audio/pcm.o audio/writer-lame.o audio/writer-m4a.o audio/writer-raw.o audio/writer-sndfile.o tui/hud.o tui/screen.o
+OBJ := audio.o cast.o cast_doc.o cast_player.o castty.o input.o json.o output.o record.o shell.o signals.o term.o xwrap.o audio/pcm.o audio/writer-lame.o audio/writer-m4a.o audio/writer-raw.o audio/writer-sndfile.o tui/hud.o tui/screen.o
 
 all: $(TARGET)
 $(TARGET): $(OBJ)
