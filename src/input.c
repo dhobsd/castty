@@ -1,3 +1,5 @@
+#include <errno.h>
+#include <poll.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -7,8 +9,43 @@
 #include "castty.h"
 #include "record.h"
 
+static ssize_t
+read_input(int chldfd, unsigned char *buf, size_t len)
+{
+	struct pollfd pfds[2] = {
+		{ .fd = STDIN_FILENO, .events = POLLIN },
+		{ .fd = chldfd, .events = POLLIN },
+	};
+
+	for (;;) {
+		int ready = poll(pfds, chldfd >= 0 ? 2 : 1, -1);
+
+		if (ready < 0) {
+			if (errno == EINTR) {
+				continue;
+			}
+			return -1;
+		}
+		if (chldfd >= 0 &&
+		    (pfds[1].revents & (POLLIN | POLLHUP | POLLERR | POLLNVAL))) {
+			return 0;
+		}
+		if (pfds[0].revents & POLLNVAL) {
+			return -1;
+		}
+		if (pfds[0].revents & (POLLIN | POLLHUP | POLLERR)) {
+			ssize_t nread = read(STDIN_FILENO, buf, len);
+
+			if (nread < 0 && errno == EINTR) {
+				continue;
+			}
+			return nread;
+		}
+	}
+}
+
 void
-inputproc(int masterfd, int controlfd)
+inputproc(int masterfd, int controlfd, int chldfd)
 {
 	unsigned char ibuf[BUFSIZ], *p;
 	enum input_state {
@@ -19,7 +56,7 @@ inputproc(int masterfd, int controlfd)
 
 	input_state = STATE_PASSTHROUGH;
 
-	while ((nread = read(STDIN_FILENO, ibuf, BUFSIZ)) > 0) {
+	while ((nread = read_input(chldfd, ibuf, BUFSIZ)) > 0) {
 		unsigned char *cmdstart;
 
 		p = ibuf;

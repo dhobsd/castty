@@ -55,6 +55,7 @@ audio_writer_raw(FILE *outfile)
 	writer = malloc(sizeof *writer);
 	if (!writer) {
 		fprintf(stderr, "No memory for audio writer\n");
+		exit(EXIT_FAILURE);
 	}
 
 	raw = malloc(sizeof *raw);

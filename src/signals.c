@@ -7,6 +7,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include <errno.h>
 #include <execinfo.h>
 #include <fcntl.h>
 #include <signal.h>
@@ -79,12 +80,20 @@ handle_term(int sig)
 static void
 handle_sigchld(int sig)
 {
+	int saved_errno = errno;
 	int status;
 	pid_t pid;
 
 	(void)sig;
 
-	while ((pid = waitpid(-1, &status, WNOHANG)) > 0);
+	while ((pid = waitpid(-1, &status, WNOHANG)) > 0) {
+		if (sigchld_write_fd >= 0) {
+			ssize_t wr = write(sigchld_write_fd, "", 1);
+			(void)wr;
+		}
+	}
+
+	errno = saved_errno;
 }
 
 static void
@@ -141,7 +150,7 @@ setup_sighandlers(void)
 	sigaltstack(&ss, 0);
 
 	struct sigaction chld;
-	chld.sa_flags = 0;
+	chld.sa_flags = SA_NOCLDSTOP;
 	(void)sigemptyset(&chld.sa_mask);
 	chld.sa_handler = handle_sigchld;
 	xsigaction(SIGCHLD, &chld, NULL);

@@ -22,6 +22,7 @@ struct control_msg {
 };
 
 extern volatile sig_atomic_t ctrl_write_fd;
+extern volatile sig_atomic_t sigchld_write_fd;
 extern volatile sig_atomic_t tty_saved;
 
 struct outargs {
@@ -49,7 +50,7 @@ struct outargs {
 int record_main(int, char **);
 void restore_tty(void);
 
-void inputproc(int, int);
+void inputproc(int, int, int);
 void outputproc(struct outargs *oa);
 void shellproc(const char *, const char *, struct winsize *, int);
 
