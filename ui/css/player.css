@@ -1,0 +1,36 @@
+#controls {
+	background: #000;
+}
+
+#controls button {
+	color: #fff;
+	background: none;
+	border: none;
+	font-size: 13pt;
+	height: 30px;
+	width: 30px;
+	margin: 0 7px 0 3px;
+	padding: 0;
+}
+
+#controls button:focus {
+	outline: none;
+}
+
+/* Override stock rangeslider.css chrome with CasTTY's slim progress bar */
+.rangeslider,
+.rangeslider__fill {
+	box-shadow: none;
+	top: 4px;
+}
+
+.rangeslider__handle {
+	display: none;
+}
+
+.rangeslider--horizontal {
+	height: 5px;
+	margin: 8px 0 0 0;
+	float: right;
+	width: calc(100% - 40px);
+}
