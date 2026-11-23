@@ -75,6 +75,7 @@ var player = function(audioFile, containerElem, events) {
 		Player.timerHandle = undefined;
 		Player.seekerHandle = undefined;
 		Player.timersRunning = 0;
+		Player.pendingSeek = null;
 
 		Player.playTime = 0;
 		Player.seekPos = 0;
@@ -137,30 +138,35 @@ var player = function(audioFile, containerElem, events) {
 		};
 
 		Player.seekTo = function(t) {
-			var back = Player.eventOff &&
-			    Player.pos + Player.termEvents[Player.eventOff - 1][0] > (t / 1000);
+			var targetSec = t / 1000;
+			var back = Player.ended || targetSec < Player.pos;
 			var prefix = "";
 
 			if (back) {
 				/* Send RIS (ESC c) in-band so WriteBuffer resets in FIFO order */
 				prefix = "\x1bc";
 				Player.pos = 0;
+				Player.eventOff = 0;
+				Player.ended = 0;
 			}
 
-			var i = back ? 0 : Player.eventOff;
+			var i = Player.eventOff;
 			var str = "";
 			while (i < Player.termEvents.length &&
-			    Player.pos + Player.termEvents[i][0] <= (t / 1000)) {
+			    Player.pos + Player.termEvents[i][0] <= targetSec) {
 				str += Player.termEvents[i][1];
 				Player.pos += Player.termEvents[i++][0];
 			}
 
-			i = i == Player.termEvents.length ? i - 1 : i;
-
-			Player.term.write(prefix + str);
+			if (prefix.length > 0 || str.length > 0) {
+				Player.term.write(prefix + str);
+			}
 			Player.eventOff = i;
 
-			return Player.termEvents[i][0] - t;
+			if (i < Player.termEvents.length) {
+				return Math.max(((Player.pos + Player.termEvents[i][0]) - targetSec) * 1000, 0);
+			}
+			return 0;
 		};
 
 		Player.behind = function() {
@@ -258,6 +264,11 @@ var player = function(audioFile, containerElem, events) {
 					Player.rem = 0;
 					Player.seekPos = 0;
 					Player.baseSeekPos = 0;
+					if (audioFile && Player.audio.readyState > 0) {
+						try {
+							Player.audio.currentTime = 0;
+						} catch (e) {}
+					}
 				}
 
 				if (Player.paused) {
@@ -291,24 +302,31 @@ var player = function(audioFile, containerElem, events) {
 		    Player.duration + '" step="' + step +
 		    '" value="0">').appendTo(Player.controls);
 
-		Player.maxSeek = 0;
+		Player.maxSeek = Player.duration;
 		Player.seeking = 0;
 		Player.seekUnpause = 0;
 		Player.seeker.rangeslider({
-			polyfill : false,
+			polyfill: false,
 
 			onSlide: function(pos, val) {
 				if (Player.seekUpdate) {
 					return;
 				}
 
+				if (Player.maxSeek > 0 && val > Player.maxSeek) {
+					val = Player.maxSeek;
+					Player.seekUpdate = 1;
+					Player.seeker.val(val).change();
+					Player.seekUpdate = 0;
+				}
+
 				if (Player.seeking == 0) {
 					Player.seeking = 1;
-					if (val > Player.maxSeek) {
-						Player.seeker.val(val).change();
-					}
 					if (Player.paused == 0) {
+						Player.seekUnpause = 1;
 						Player.toggle.trigger('click');
+					} else {
+						Player.seekUnpause = 0;
 					}
 				}
 			},
@@ -318,19 +336,41 @@ var player = function(audioFile, containerElem, events) {
 					return;
 				}
 
-				if (val > Player.maxSeek) {
+				if (Player.maxSeek > 0 && val > Player.maxSeek) {
+					val = Player.maxSeek;
+					Player.seekUpdate = 1;
 					Player.seeker.val(val).change();
+					Player.seekUpdate = 0;
 				}
 
+				var wasEnded = Player.ended;
 				stopTimers(false);
 				Player.rem = Player.seekTo(val);
 				if (audioFile) {
-					Player.audio.currentTime = val / 1000;
+					if (Player.audio.readyState > 0) {
+						try {
+							Player.audio.currentTime = val / 1000;
+							Player.pendingSeek = null;
+						} catch (e) {
+							Player.pendingSeek = val / 1000;
+						}
+					} else {
+						Player.pendingSeek = val / 1000;
+					}
 				} else {
 					Player.seekPos = val;
 					Player.baseSeekPos = val;
 				}
+				if (wasEnded && !Player.ended && Player.paused) {
+					Player.toggle.html('<i class="material-icons">&#xE037;</i>');
+				}
 				Player.seeking = 0;
+				if (Player.seekUnpause) {
+					Player.seekUnpause = 0;
+					if (Player.paused) {
+						Player.toggle.trigger('click');
+					}
+				}
 			}
 		});
 
@@ -340,8 +380,16 @@ var player = function(audioFile, containerElem, events) {
 				finishPlayback();
 			});
 
-			$(Player.audio).on('durationchange', function() {
-				Player.maxSeek = Player.audio.duration * 1000;
+			$(Player.audio).on('loadedmetadata durationchange', function() {
+				if (isFinite(Player.audio.duration) && Player.audio.duration > 0) {
+					Player.maxSeek = Player.audio.duration * 1000;
+				}
+				if (Player.pendingSeek !== null && Player.audio.readyState > 0) {
+					try {
+						Player.audio.currentTime = Player.pendingSeek;
+						Player.pendingSeek = null;
+					} catch (e) {}
+				}
 			});
 
 			$(Player.audio).on('canplaythrough', function() {
