@@ -27,7 +27,13 @@ var player = function(audioFile, containerElem, events) {
 	};
 
 	var init = function(audioFile, containerElem, events) {
+		var baseFontSize = 16;
+
 		Player.container = $(containerElem);
+		Player.container.css({
+			maxWidth: '100%',
+			boxSizing: 'border-box'
+		});
 
 		Player.termContainer = $('<div id="term"></div>')
 		    .appendTo(Player.container);
@@ -39,7 +45,7 @@ var player = function(audioFile, containerElem, events) {
 			rows: events.height,
 			cols: events.width,
 			fontFamily: 'courier-new, courier, monospace',
-			fontSize: 16,
+			fontSize: baseFontSize,
 			cursorStyle: 'block',
 			cursorInactiveStyle: 'block',
 			disableStdin: true
@@ -57,17 +63,64 @@ var player = function(audioFile, containerElem, events) {
 
 		var screenEl = Player.term.element ?
 		    Player.term.element.querySelector('.xterm-screen') : null;
-		Player.termWidth = (screenEl ?
-		    Math.ceil(screenEl.getBoundingClientRect().width) : 0) + 'px';
+		var baseWidth = screenEl ? screenEl.getBoundingClientRect().width : 0;
 
-		Player.termContainer.css({
-		    margin: '0 auto',
-		    width: Player.termWidth
-		});
+		Player.layout = function() {
+			var docWidth = document.documentElement.clientWidth || window.innerWidth || 0;
+			var rect = Player.container[0].getBoundingClientRect();
+			var availWidth = Player.container.innerWidth();
+			if (docWidth > 0) {
+				var maxFromViewport = Math.max(docWidth - Math.max(rect.left, 0) * 2, 0);
+				if (!availWidth || availWidth > docWidth) {
+					availWidth = maxFromViewport || docWidth;
+				}
+			}
 
-		Player.controls.css({
-		    margin: '0 auto',
-		    width: Player.termWidth
+			if (baseWidth <= 0 && screenEl) {
+				Player.term.options.fontSize = baseFontSize;
+				baseWidth = screenEl.getBoundingClientRect().width;
+			}
+
+			var fontSize = baseFontSize;
+			if (availWidth > 0 && baseWidth > availWidth) {
+				fontSize = Math.max(4, baseFontSize * (availWidth / baseWidth));
+			}
+
+			Player.term.options.fontSize = fontSize;
+
+			var renderedWidth = screenEl ?
+			    screenEl.getBoundingClientRect().width : baseWidth;
+			if (availWidth > 0 && renderedWidth > availWidth && renderedWidth > 0) {
+				fontSize = Math.max(4, fontSize * ((availWidth - 1) / renderedWidth));
+				Player.term.options.fontSize = fontSize;
+				renderedWidth = screenEl.getBoundingClientRect().width;
+			}
+
+			var boxWidth = availWidth > 0 ?
+			    Math.min(Math.ceil(renderedWidth), availWidth) :
+			    Math.ceil(renderedWidth);
+			Player.termWidth = boxWidth + 'px';
+
+			Player.termContainer.css({
+				margin: '0 auto',
+				width: Player.termWidth,
+				maxWidth: '100%',
+				overflowX: renderedWidth > boxWidth + 1 ? 'auto' : 'hidden'
+			});
+
+			Player.controls.css({
+				margin: '0 auto',
+				width: Player.termWidth,
+				maxWidth: '100%'
+			});
+
+			if (Player.seeker && Player.seeker.data('plugin_rangeslider')) {
+				Player.seeker.rangeslider('update', false, false);
+			}
+		};
+
+		$(window).on('resize orientationchange', function() {
+			Player.layout();
 		});
 
 		/* Copy terminal selection to clipboard when mouse selection completes */
@@ -350,8 +403,22 @@ var player = function(audioFile, containerElem, events) {
 		Player.maxSeek = Player.duration;
 		Player.seeking = 0;
 		Player.seekUnpause = 0;
+
+		var rangeEvents = ('PointerEvent' in window) ? {
+			startEvent: ['pointerdown'],
+			moveEvent: ['pointermove'],
+			endEvent: ['pointerup', 'pointercancel']
+		} : {
+			startEvent: ['touchstart', 'mousedown'],
+			moveEvent: ['touchmove', 'mousemove'],
+			endEvent: ['touchend', 'touchcancel', 'mouseup']
+		};
+
 		Player.seeker.rangeslider({
 			polyfill: false,
+			startEvent: rangeEvents.startEvent,
+			moveEvent: rangeEvents.moveEvent,
+			endEvent: rangeEvents.endEvent,
 
 			onSlide: function(pos, val) {
 				if (Player.seekUpdate) {
@@ -469,6 +536,7 @@ var player = function(audioFile, containerElem, events) {
 			});
 		}
 
+		Player.layout();
 		return Player;
 	};
 
