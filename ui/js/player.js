@@ -40,9 +40,20 @@ var player = function(audioFile, containerElem, events) {
 			cols: events.width,
 			fontFamily: 'courier-new, courier, monospace',
 			fontSize: 16,
-			cursorStyle: 'block'
+			cursorStyle: 'block',
+			cursorInactiveStyle: 'block',
+			disableStdin: true
 		});
 		Player.term.open(Player.termContainer[0]);
+
+		/* Prevent hidden xterm textarea from summoning mobile virtual keyboards */
+		if (Player.term.textarea) {
+			Player.term.textarea.setAttribute('readonly', 'readonly');
+			Player.term.textarea.setAttribute('inputmode', 'none');
+			Player.term.textarea.setAttribute('tabindex', '-1');
+			Player.term.textarea.setAttribute('aria-hidden', 'true');
+			Player.term.textarea.disabled = true;
+		}
 
 		var screenEl = Player.term.element ?
 		    Player.term.element.querySelector('.xterm-screen') : null;
