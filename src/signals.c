@@ -31,6 +31,8 @@ do_backtrace(int sig, siginfo_t *siginfo, void *context)
 
 	(void)context;
 
+	restore_tty();
+
 	frames = backtrace(callstack, 128);
 	strs = backtrace_symbols(callstack, frames);
 
@@ -60,15 +62,18 @@ do_backtrace(int sig, siginfo_t *siginfo, void *context)
 	fprintf(stderr, "\r\n");
 	free(strs);
 
-	if (ioctl(STDOUT_FILENO, TIOCSWINSZ, &rwin) == -1) {
-		perror("ioctl(TIOCSWINSZ)");
-	}
-
-	if (tcsetattr(STDOUT_FILENO, TCSAFLUSH, &tt) == -1) {
-		perror("tcsetattr");
-	}
-
 	exit(EXIT_FAILURE);
+}
+
+static void
+handle_term(int sig)
+{
+	if (child > 0) {
+		(void)kill(child, sig);
+	}
+	restore_tty();
+	signal(sig, SIG_DFL);
+	raise(sig);
 }
 
 static void
@@ -159,5 +164,12 @@ setup_sighandlers(void)
 	(void)sigemptyset(&winch.sa_mask);
 	winch.sa_handler = handle_sigwinch;
 	xsigaction(SIGWINCH, &winch, NULL);
+
+	struct sigaction term;
+	term.sa_flags = SA_RESETHAND;
+	(void)sigemptyset(&term.sa_mask);
+	term.sa_handler = handle_term;
+	xsigaction(SIGTERM, &term, NULL);
+	xsigaction(SIGHUP, &term, NULL);
 }
 

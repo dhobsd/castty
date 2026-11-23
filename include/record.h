@@ -22,6 +22,7 @@ struct control_msg {
 };
 
 extern volatile sig_atomic_t ctrl_write_fd;
+extern volatile sig_atomic_t tty_saved;
 
 struct outargs {
 	int start_paused;
@@ -46,6 +47,7 @@ struct outargs {
 };
 
 int record_main(int, char **);
+void restore_tty(void);
 
 void inputproc(int, int);
 void outputproc(struct outargs *oa);

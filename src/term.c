@@ -2,15 +2,21 @@
 
 #include <ctype.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <poll.h>
+#include <signal.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 
-#include "castty.h"
 #include "json.h"
 #include "term.h"
+
+static char reset_buf[2048];
+static size_t reset_len;
+static volatile sig_atomic_t reset_ready;
 
 enum {
 	PROBE_TIMEOUT_MS = 150,
@@ -457,4 +463,388 @@ term_probe_free(struct term_probe *probe)
 	free(probe->theme_json);
 	probe->version = NULL;
 	probe->theme_json = NULL;
+}
+
+enum {
+	TI_MAGIC_16 = 0x011a,
+	TI_MAGIC_32 = 0x021e,
+	TI_MAX_FILE = 32768,
+	TI_CURSOR_NORMAL = 16,
+	TI_EXIT_ALT_CHARSET = 38,
+	TI_EXIT_ATTR = 39,
+	TI_EXIT_CA_MODE = 40,
+	TI_INIT_1 = 48,
+	TI_INIT_2 = 49,
+	TI_INIT_3 = 50,
+	TI_KEYPAD_LOCAL = 88,
+	TI_RESET_1 = 122,
+	TI_RESET_2 = 123,
+	TI_RESET_3 = 124,
+};
+
+struct ti_table {
+	const unsigned char *buf;
+	size_t str_pos;
+	int str_cnt;
+	size_t tbl_pos;
+	size_t tbl_sz;
+};
+
+static uint16_t
+ti_u16le(const unsigned char *p)
+{
+	return (uint16_t)p[0] | ((uint16_t)p[1] << 8);
+}
+
+static int16_t
+ti_s16le(const unsigned char *p)
+{
+	return (int16_t)ti_u16le(p);
+}
+
+static int
+ti_parse_header(const unsigned char *tbuf, size_t tlen, struct ti_table *tbl)
+{
+	uint16_t magic;
+	int16_t name_sz, bool_sz, num_cnt, str_cnt, tbl_sz;
+	size_t num_bytes, pos, tbl_pos;
+
+	if (tlen < 12) {
+		return -1;
+	}
+
+	magic = ti_u16le(tbuf);
+	if (magic == TI_MAGIC_16) {
+		num_bytes = 2;
+	} else if (magic == TI_MAGIC_32) {
+		num_bytes = 4;
+	} else {
+		return -1;
+	}
+
+	name_sz = ti_s16le(tbuf + 2);
+	bool_sz = ti_s16le(tbuf + 4);
+	num_cnt = ti_s16le(tbuf + 6);
+	str_cnt = ti_s16le(tbuf + 8);
+	tbl_sz = ti_s16le(tbuf + 10);
+	if (name_sz < 0 || bool_sz < 0 || num_cnt < 0 ||
+	    str_cnt < 0 || tbl_sz < 0) {
+		return -1;
+	}
+
+	pos = 12 + (size_t)name_sz + (size_t)bool_sz;
+	if (pos & 1) {
+		pos++;
+	}
+	if ((size_t)num_cnt > (tlen - pos) / num_bytes) {
+		return -1;
+	}
+	pos += (size_t)num_cnt * num_bytes;
+
+	if ((size_t)str_cnt > (tlen - pos) / 2) {
+		return -1;
+	}
+	tbl_pos = pos + (size_t)str_cnt * 2;
+	if ((size_t)tbl_sz > tlen - tbl_pos) {
+		return -1;
+	}
+
+	tbl->buf = tbuf;
+	tbl->str_pos = pos;
+	tbl->str_cnt = str_cnt;
+	tbl->tbl_pos = tbl_pos;
+	tbl->tbl_sz = (size_t)tbl_sz;
+	return 0;
+}
+
+static const char *
+ti_get_str(const struct ti_table *tbl, int idx)
+{
+	int16_t off;
+	const char *str;
+
+	if (idx < 0 || idx >= tbl->str_cnt) {
+		return NULL;
+	}
+
+	off = ti_s16le(tbl->buf + tbl->str_pos + (size_t)idx * 2);
+	if (off < 0 || (size_t)off >= tbl->tbl_sz) {
+		return NULL;
+	}
+
+	str = (const char *)(tbl->buf + tbl->tbl_pos + (size_t)off);
+	if (memchr(str, '\0', tbl->tbl_sz - (size_t)off) == NULL) {
+		return NULL;
+	}
+	return str;
+}
+
+static int
+try_read_ti_path(const char *path, unsigned char *tbuf, size_t cap,
+    size_t *out_len)
+{
+	int fd;
+	size_t off = 0;
+
+	fd = open(path, O_RDONLY);
+	if (fd < 0) {
+		return -1;
+	}
+
+	while (off < cap) {
+		ssize_t nr = read(fd, tbuf + off, cap - off);
+		if (nr < 0) {
+			if (errno == EINTR) {
+				continue;
+			}
+			close(fd);
+			return -1;
+		}
+		if (nr == 0) {
+			break;
+		}
+		off += (size_t)nr;
+	}
+	close(fd);
+
+	*out_len = off;
+	return off >= 12 ? 0 : -1;
+}
+
+static int
+try_read_ti_dir(const char *dir, const char *term_type, unsigned char *tbuf,
+    size_t cap, size_t *out_len, struct ti_table *tbl)
+{
+	char path[1024];
+	unsigned char first = (unsigned char)term_type[0];
+	int rv;
+
+	if (!dir || !*dir) {
+		return -1;
+	}
+
+	/* Linux/BSD style: <dir>/<c>/<TERM> */
+	rv = snprintf(path, sizeof path, "%s/%c/%s", dir, first, term_type);
+	if (rv > 0 && (size_t)rv < sizeof path &&
+	    try_read_ti_path(path, tbuf, cap, out_len) == 0 &&
+	    ti_parse_header(tbuf, *out_len, tbl) == 0) {
+		return 0;
+	}
+
+	/* macOS/Darwin style: <dir>/<xx>/<TERM> */
+	rv = snprintf(path, sizeof path, "%s/%02x/%s", dir, first, term_type);
+	if (rv > 0 && (size_t)rv < sizeof path &&
+	    try_read_ti_path(path, tbuf, cap, out_len) == 0 &&
+	    ti_parse_header(tbuf, *out_len, tbl) == 0) {
+		return 0;
+	}
+
+	return -1;
+}
+
+static unsigned char *
+load_terminfo(const char *term_type, struct ti_table *tbl)
+{
+	static const char *sys_dirs[] = {
+		"/etc/terminfo",
+		"/lib/terminfo",
+		"/usr/share/terminfo",
+		"/usr/local/share/terminfo",
+	};
+	unsigned char *tbuf;
+	size_t tlen = 0;
+	const char *env_val;
+
+	if (!term_type || !*term_type || strchr(term_type, '/') != NULL) {
+		return NULL;
+	}
+
+	tbuf = malloc(TI_MAX_FILE);
+	if (tbuf == NULL) {
+		return NULL;
+	}
+
+	env_val = getenv("TERMINFO");
+	if (env_val && try_read_ti_dir(env_val, term_type, tbuf, TI_MAX_FILE,
+	    &tlen, tbl) == 0) {
+		return tbuf;
+	}
+
+	env_val = getenv("HOME");
+	if (env_val && *env_val) {
+		char home_ti[1024];
+		int rv = snprintf(home_ti, sizeof home_ti, "%s/.terminfo", env_val);
+		if (rv > 0 && (size_t)rv < sizeof home_ti &&
+		    try_read_ti_dir(home_ti, term_type, tbuf, TI_MAX_FILE,
+		    &tlen, tbl) == 0) {
+			return tbuf;
+		}
+	}
+
+	env_val = getenv("TERMINFO_DIRS");
+	if (env_val) {
+		const char *p = env_val;
+		while (*p) {
+			const char *colon = strchr(p, ':');
+			size_t dlen = colon ? (size_t)(colon - p) : strlen(p);
+			char dir[1024];
+
+			if (dlen == 0) {
+				snprintf(dir, sizeof dir, "/usr/share/terminfo");
+			} else if (dlen < sizeof dir) {
+				memcpy(dir, p, dlen);
+				dir[dlen] = '\0';
+			} else {
+				dir[0] = '\0';
+			}
+
+			if (dir[0] && try_read_ti_dir(dir, term_type, tbuf,
+			    TI_MAX_FILE, &tlen, tbl) == 0) {
+				return tbuf;
+			}
+			if (!colon) {
+				break;
+			}
+			p = colon + 1;
+		}
+	}
+
+	for (size_t i = 0; i < sizeof sys_dirs / sizeof sys_dirs[0]; i++) {
+		if (try_read_ti_dir(sys_dirs[i], term_type, tbuf, TI_MAX_FILE,
+		    &tlen, tbl) == 0) {
+			return tbuf;
+		}
+	}
+
+	free(tbuf);
+	return NULL;
+}
+
+static void
+append_raw_bytes(const char *s, size_t len)
+{
+	size_t avail = sizeof reset_buf - reset_len;
+	size_t n = len < avail ? len : avail;
+
+	if (n > 0) {
+		memcpy(reset_buf + reset_len, s, n);
+		reset_len += n;
+	}
+}
+
+static void
+append_ti_cap(const struct ti_table *tbl, int idx, int *added, int *is_ansi)
+{
+	const char *s = ti_get_str(tbl, idx);
+
+	if (!s || !*s) {
+		return;
+	}
+
+	if (is_ansi && strstr(s, "\x1b[") != NULL) {
+		*is_ansi = 1;
+	}
+	if (added) {
+		*added = 1;
+	}
+
+	for (size_t i = 0; s[i] != '\0'; i++) {
+		if (s[i] == '$' && s[i + 1] == '<') {
+			size_t j = i + 2;
+			int has_digit = 0;
+
+			while (isdigit((unsigned char)s[j])) {
+				has_digit = 1;
+				j++;
+			}
+			if (s[j] == '.') {
+				j++;
+				while (isdigit((unsigned char)s[j])) {
+					has_digit = 1;
+					j++;
+				}
+			}
+			while (s[j] == '*' || s[j] == '/') {
+				j++;
+			}
+			if (has_digit && s[j] == '>') {
+				i = j;
+				continue;
+			}
+		}
+		if (reset_len < sizeof reset_buf) {
+			reset_buf[reset_len++] = s[i];
+		}
+	}
+}
+
+void
+term_reset_init(const char *term_type, int outfd)
+{
+	static const char dec_modes[] =
+	    "\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[?2004l";
+	static const char vt_fallback[] =
+	    "\x1b[?1049l\x1b[?1l\x1b[?25h\x1b[0m";
+	struct ti_table tbl;
+	unsigned char *ti_buf;
+	int have_reset = 0;
+	int is_ansi = 0;
+	int is_dumb = term_type && strcmp(term_type, "dumb") == 0;
+
+	reset_len = 0;
+	reset_ready = 0;
+	if (!isatty(outfd) || is_dumb) {
+		return;
+	}
+
+	ti_buf = load_terminfo(term_type, &tbl);
+	if (ti_buf != NULL) {
+		append_ti_cap(&tbl, TI_EXIT_CA_MODE, NULL, &is_ansi);
+		append_ti_cap(&tbl, TI_KEYPAD_LOCAL, NULL, &is_ansi);
+		append_ti_cap(&tbl, TI_EXIT_ALT_CHARSET, NULL, &is_ansi);
+		append_ti_cap(&tbl, TI_EXIT_ATTR, NULL, &is_ansi);
+		append_ti_cap(&tbl, TI_CURSOR_NORMAL, NULL, &is_ansi);
+
+		append_ti_cap(&tbl, TI_RESET_1, &have_reset, &is_ansi);
+		append_ti_cap(&tbl, TI_RESET_2, &have_reset, &is_ansi);
+		append_ti_cap(&tbl, TI_RESET_3, &have_reset, &is_ansi);
+		if (!have_reset) {
+			append_ti_cap(&tbl, TI_INIT_1, NULL, &is_ansi);
+			append_ti_cap(&tbl, TI_INIT_2, NULL, &is_ansi);
+			append_ti_cap(&tbl, TI_INIT_3, NULL, &is_ansi);
+		}
+		free(ti_buf);
+	}
+
+	if (reset_len == 0) {
+		append_raw_bytes(vt_fallback, sizeof vt_fallback - 1);
+		is_ansi = 1;
+	}
+
+	if (is_ansi) {
+		append_raw_bytes(dec_modes, sizeof dec_modes - 1);
+	}
+
+	reset_ready = 1;
+}
+
+void
+term_write_reset(int outfd)
+{
+	size_t off = 0;
+
+	if (!reset_ready || reset_len == 0) {
+		return;
+	}
+
+	while (off < reset_len) {
+		ssize_t n = write(outfd, reset_buf + off, reset_len - off);
+		if (n < 0) {
+			if (errno == EINTR) {
+				continue;
+			}
+			break;
+		}
+		off += (size_t)n;
+	}
 }

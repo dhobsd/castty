@@ -27,6 +27,20 @@ FILE *debug_out;
 int masterfd;
 pid_t child;
 volatile sig_atomic_t ctrl_write_fd = -1;
+volatile sig_atomic_t tty_saved = 0;
+
+void
+restore_tty(void)
+{
+	if (!tty_saved) {
+		return;
+	}
+	tty_saved = 0;
+
+	(void)ioctl(STDIN_FILENO, TIOCSWINSZ, &rwin);
+	(void)tcsetattr(STDIN_FILENO, TCSAFLUSH, &tt);
+	term_write_reset(STDOUT_FILENO);
+}
 
 static void
 set_raw_input(void)
@@ -293,6 +307,8 @@ record_main(int argc, char **argv)
 	}
 
 	owin = rwin = win;
+	term_reset_init(term, STDOUT_FILENO);
+	tty_saved = 1;
 
 	if (!oa.rows || oa.rows > win.ws_row) {
 		oa.rows = win.ws_row;
@@ -322,10 +338,14 @@ record_main(int argc, char **argv)
 	if (child == 0) {
 		struct sigaction dfl;
 
+		tty_saved = 0;
+
 		memset(&dfl, 0, sizeof dfl);
 		(void)sigemptyset(&dfl.sa_mask);
 		dfl.sa_handler = SIG_DFL;
 		xsigaction(SIGCHLD, &dfl, NULL);
+		xsigaction(SIGTERM, &dfl, NULL);
+		xsigaction(SIGHUP, &dfl, NULL);
 
 		pid_t subchild = fork();
 		if (subchild < 0) {
@@ -365,13 +385,9 @@ record_main(int argc, char **argv)
 	ctrl_write_fd = -1;
 	xclose(controlfd[1]);
 
-	signal(SIGWINCH, NULL);
+	signal(SIGWINCH, SIG_DFL);
 
-	if (ioctl(STDIN_FILENO, TIOCSWINSZ, &rwin) == -1) {
-		perror("ioctl(TIOCSWINSZ)");
-	}
-
-	xtcsetattr(STDIN_FILENO, TCSAFLUSH, &tt);
+	restore_tty();
 	term_probe_free(&probe);
 
 	return 0;
