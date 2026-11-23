@@ -15,12 +15,124 @@ var getTimeout = (function() {
 	};
 })();
 
-var player = function(audioFile, containerElem, events, termInfo) {
+var player = function(audioFile, containerElem, events, termInfoOrOpts, maybeOpts) {
 	var Player = {};
 	var ICON_PLAY = '<i class="material-icons" aria-hidden="true">&#xE037;</i>';
 	var ICON_PAUSE = '<i class="material-icons" aria-hidden="true">&#xE034;</i>';
 	var ICON_REPLAY = '<i class="material-icons" aria-hidden="true">&#xE042;</i>';
 	var ICON_LOADING = '<i class="material-icons" aria-hidden="true">&#xE88B;</i>';
+	var ICON_VOLUME = '<i class="material-icons" aria-hidden="true">&#xE050;</i>';
+	var ICON_MUTED = '<i class="material-icons" aria-hidden="true">&#xE04F;</i>';
+	var ICON_THEME = '<i class="material-icons" aria-hidden="true">&#xE891;</i>';
+	var ICON_FULLSCREEN = '<i class="material-icons" aria-hidden="true">&#xE5D0;</i>';
+	var ICON_FULLSCREEN_EXIT = '<i class="material-icons" aria-hidden="true">&#xE5D1;</i>';
+
+	var THEME_ORDER = ['default', 'high-contrast', 'light', 'vga'];
+	var THEMES = {
+		'default': {
+			label: 'Default Dark',
+			minContrast: 1,
+			colors: {
+				background: '#000000',
+				foreground: '#ffffff',
+				cursor: '#ffffff',
+				cursorAccent: '#000000'
+			}
+		},
+		'high-contrast': {
+			label: 'High Contrast',
+			minContrast: 7,
+			colors: {
+				background: '#000000',
+				foreground: '#ffffff',
+				cursor: '#00ff66',
+				cursorAccent: '#000000',
+				selectionBackground: 'rgba(255, 255, 0, 0.4)',
+				black: '#000000',
+				red: '#ff5555',
+				green: '#55ff55',
+				yellow: '#ffff55',
+				blue: '#66b3ff',
+				magenta: '#ff66ff',
+				cyan: '#55ffff',
+				white: '#ffffff',
+				brightBlack: '#b3b3b3',
+				brightRed: '#ff8080',
+				brightGreen: '#80ff80',
+				brightYellow: '#ffff80',
+				brightBlue: '#99ccff',
+				brightMagenta: '#ff99ff',
+				brightCyan: '#80ffff',
+				brightWhite: '#ffffff'
+			}
+		},
+		'light': {
+			label: 'High Contrast Light',
+			minContrast: 4.5,
+			colors: {
+				background: '#ffffff',
+				foreground: '#111111',
+				cursor: '#111111',
+				cursorAccent: '#ffffff',
+				selectionBackground: 'rgba(0, 102, 204, 0.25)',
+				black: '#111111',
+				red: '#b91c1c',
+				green: '#15803d',
+				yellow: '#854d0e',
+				blue: '#1d4ed8',
+				magenta: '#7e22ce',
+				cyan: '#0e7490',
+				white: '#525252',
+				brightBlack: '#404040',
+				brightRed: '#991b1b',
+				brightGreen: '#166534',
+				brightYellow: '#713f12',
+				brightBlue: '#1e40af',
+				brightMagenta: '#6b21a8',
+				brightCyan: '#155e75',
+				brightWhite: '#111111'
+			}
+		},
+		'vga': {
+			label: 'Classic VGA (16-color)',
+			minContrast: 1,
+			colors: {
+				background: '#000000',
+				foreground: '#aaaaaa',
+				cursor: '#aaaaaa',
+				cursorAccent: '#000000',
+				black: '#000000',
+				red: '#aa0000',
+				green: '#00aa00',
+				yellow: '#aa5500',
+				blue: '#0000aa',
+				magenta: '#aa00aa',
+				cyan: '#00aaaa',
+				white: '#aaaaaa',
+				brightBlack: '#555555',
+				brightRed: '#ff5555',
+				brightGreen: '#55ff55',
+				brightYellow: '#ffff55',
+				brightBlue: '#5555ff',
+				brightMagenta: '#ff55ff',
+				brightCyan: '#55ffff',
+				brightWhite: '#ffffff'
+			}
+		}
+	};
+
+	var formatTime = function(ms) {
+		var totalSec = Math.max(Math.floor((ms || 0) / 1000), 0);
+		var hrs = Math.floor(totalSec / 3600);
+		var mins = Math.floor((totalSec % 3600) / 60);
+		var secs = totalSec % 60;
+		var secStr = secs < 10 ? '0' + secs : String(secs);
+		if (hrs > 0) {
+			var minStr = mins < 10 ? '0' + mins : String(mins);
+			return hrs + ':' + minStr + ':' + secStr;
+		}
+		return mins + ':' + secStr;
+	};
 
 	var setToggleIcon = function(icon, label) {
 		Player.toggle.html(icon).attr('aria-label', label);
@@ -51,6 +163,7 @@ var player = function(audioFile, containerElem, events, termInfo) {
 				width: header.width || (info && info.cols) || 80,
 				height: header.height || (info && info.rows) || 24,
 				duration: header.duration || prevSec,
+				env: header.env,
 				stdout: v2Stdout
 			};
 		}
@@ -75,21 +188,27 @@ var player = function(audioFile, containerElem, events, termInfo) {
 		return rawEvents;
 	};
 
-	var init = function(audioFile, containerElem, events, termInfo) {
+	var init = function(audioFile, containerElem, events, termInfo, opts) {
 		events = normalizeEvents(events, termInfo);
+		opts = opts || {};
+
 		var baseFontSize = 16;
 
+		Player.themes = THEMES;
 		Player.container = $(containerElem);
 		Player.container.css({
 			maxWidth: '100%',
 			boxSizing: 'border-box'
 		});
 
-		Player.termContainer = $('<div id="term"></div>')
+		Player.root = $('<div class="castty-player" role="region" aria-label="Terminal recording player"></div>')
 		    .appendTo(Player.container);
 
+		Player.termContainer = $('<div id="term"></div>')
+		    .appendTo(Player.root);
+
 		Player.controls = $('<div id="controls"></div>')
-		    .appendTo(Player.container);
+		    .appendTo(Player.root);
 
 		Player.term = new Terminal({
 			rows: events.height,
@@ -111,45 +230,112 @@ var player = function(audioFile, containerElem, events, termInfo) {
 			Player.term.textarea.disabled = true;
 		}
 
+		Player.themeName = 'default';
+		Player.setTheme = function(themeOrName) {
+			var spec = typeof themeOrName === 'string' ? THEMES[themeOrName] : null;
+			if (spec) {
+				Player.themeName = themeOrName;
+				Player.term.options.minimumContrastRatio = spec.minContrast;
+				Player.term.options.theme = spec.colors;
+				Player.root.css('background', spec.colors.background || '#000');
+				if (Player.themeToggle) {
+					Player.themeToggle.attr('aria-label',
+					    'Theme: ' + spec.label + '. Click to switch');
+				}
+			} else if (themeOrName && typeof themeOrName === 'object') {
+				Player.themeName = 'custom';
+				Player.term.options.theme = themeOrName;
+				Player.root.css('background', themeOrName.background || '#000');
+			}
+		};
+
+		var initialTheme = opts.theme;
+		if (!initialTheme && window.matchMedia &&
+		    window.matchMedia('(prefers-contrast: more)').matches) {
+			initialTheme = 'high-contrast';
+		}
+		Player.setTheme(initialTheme || 'default');
+
 		var screenEl = Player.term.element ?
 		    Player.term.element.querySelector('.xterm-screen') : null;
-		var baseWidth = screenEl ? screenEl.getBoundingClientRect().width : 0;
+		var baseRect = screenEl ? screenEl.getBoundingClientRect() : null;
+		var baseWidth = baseRect ? baseRect.width : 0;
+		var baseHeight = baseRect ? baseRect.height : 0;
+
+		Player.isFullscreen = false;
+
+		var isNativeFullscreen = function() {
+			var fsEl = document.fullscreenElement || document.webkitFullscreenElement;
+			return fsEl === Player.root[0];
+		};
 
 		Player.layout = function() {
-			var docWidth = document.documentElement.clientWidth || window.innerWidth || 0;
-			var rect = Player.container[0].getBoundingClientRect();
-			var availWidth = Player.container.innerWidth();
-			if (docWidth > 0) {
-				var maxFromViewport = Math.max(docWidth - Math.max(rect.left, 0) * 2, 0);
-				if (!availWidth || availWidth > docWidth) {
-					availWidth = maxFromViewport || docWidth;
+			var fs = Player.isFullscreen || isNativeFullscreen();
+			var availWidth;
+			var availHeight = 0;
+
+			if (fs) {
+				availWidth = window.innerWidth || document.documentElement.clientWidth || 0;
+				availHeight = window.innerHeight || document.documentElement.clientHeight || 0;
+			} else {
+				var docWidth = document.documentElement.clientWidth || window.innerWidth || 0;
+				var rect = Player.container[0].getBoundingClientRect();
+				availWidth = Player.container.innerWidth();
+				if (docWidth > 0) {
+					var maxFromViewport = Math.max(docWidth - Math.max(rect.left, 0) * 2, 0);
+					if (!availWidth || availWidth > docWidth) {
+						availWidth = maxFromViewport || docWidth;
+					}
 				}
 			}
 
-			if (baseWidth <= 0 && screenEl) {
+			if ((baseWidth <= 0 || baseHeight <= 0) && screenEl) {
 				Player.term.options.fontSize = baseFontSize;
-				baseWidth = screenEl.getBoundingClientRect().width;
+				baseRect = screenEl.getBoundingClientRect();
+				baseWidth = baseRect.width;
+				baseHeight = baseRect.height;
 			}
 
 			var fontSize = baseFontSize;
-			if (availWidth > 0 && baseWidth > availWidth) {
-				fontSize = Math.max(4, baseFontSize * (availWidth / baseWidth));
+			if (availWidth > 0 && baseWidth > 0 && (fs || baseWidth > availWidth)) {
+				fontSize = baseFontSize * (availWidth / baseWidth);
 			}
+			if (fs && availHeight > 0 && baseHeight > 0) {
+				var controlsH = Player.controls.outerHeight() || 44;
+				var maxTermH = Math.max(availHeight - controlsH, 100);
+				fontSize = Math.min(fontSize, baseFontSize * (maxTermH / baseHeight));
+			}
+			fontSize = Math.max(4, Math.min(fontSize, fs ? 48 : baseFontSize));
 
 			Player.term.options.fontSize = fontSize;
 
-			var renderedWidth = screenEl ?
-			    screenEl.getBoundingClientRect().width : baseWidth;
+			var renderedRect = screenEl ? screenEl.getBoundingClientRect() : null;
+			var renderedWidth = renderedRect ? renderedRect.width : baseWidth;
 			if (availWidth > 0 && renderedWidth > availWidth && renderedWidth > 0) {
 				fontSize = Math.max(4, fontSize * ((availWidth - 1) / renderedWidth));
 				Player.term.options.fontSize = fontSize;
-				renderedWidth = screenEl.getBoundingClientRect().width;
+				renderedRect = screenEl.getBoundingClientRect();
+				renderedWidth = renderedRect.width;
+			}
+			if (fs && availHeight > 0 && renderedRect) {
+				var fsControlsH = Player.controls.outerHeight() || 44;
+				var maxFsTermH = Math.max(availHeight - fsControlsH, 100);
+				if (renderedRect.height > maxFsTermH && renderedRect.height > 0) {
+					fontSize = Math.max(4, fontSize * (maxFsTermH / renderedRect.height));
+					Player.term.options.fontSize = fontSize;
+					renderedRect = screenEl.getBoundingClientRect();
+					renderedWidth = renderedRect.width;
+				}
 			}
 
 			var boxWidth = availWidth > 0 ?
 			    Math.min(Math.ceil(renderedWidth), availWidth) :
 			    Math.ceil(renderedWidth);
 			Player.termWidth = boxWidth + 'px';
+
+			Player.root.css({
+				width: fs ? '100%' : Player.termWidth
+			});
 
 			Player.termContainer.css({
 				margin: '0 auto',
@@ -202,6 +388,21 @@ var player = function(audioFile, containerElem, events, termInfo) {
 		Player.playTime = 0;
 		Player.seekPos = 0;
 		Player.baseSeekPos = 0;
+		Player.duration = (events.duration || 0) * 1000;
+
+		var updateTimeDisplay = function(curMs) {
+			if (!Player.timeElapsed) {
+				return;
+			}
+			var clamped = Math.min(Math.max(curMs || 0, 0), Player.duration || curMs || 0);
+			var curStr = formatTime(clamped);
+			var durStr = formatTime(Player.duration);
+			Player.timeElapsed.text(curStr);
+			Player.timeTotal.text(durStr);
+			if (Player.seeker) {
+				Player.seeker.attr('aria-valuetext', curStr + ' of ' + durStr);
+			}
+		};
 
 		var startTimers = function() {
 			if (Player.timersRunning || Player.paused) {
@@ -248,6 +449,7 @@ var player = function(audioFile, containerElem, events, termInfo) {
 			Player.seekUpdate = 1;
 			Player.seeker.val(Player.duration).change();
 			Player.seekUpdate = 0;
+			updateTimeDisplay(Player.duration);
 
 			Player.ended = 1;
 			Player.paused = 1;
@@ -340,13 +542,15 @@ var player = function(audioFile, containerElem, events, termInfo) {
 
 			Player.seekUpdate = 1;
 			if (audioFile) {
-				var curMs = Player.audio.currentTime * 1000;
-				Player.seeker.val(Math.min(curMs, Player.duration)).change();
+				var curMs = Math.min(Player.audio.currentTime * 1000, Player.duration);
+				Player.seeker.val(curMs).change();
+				updateTimeDisplay(curMs);
 			} else {
 				Player.seekPos = Math.min(
 				    Player.baseSeekPos + (Date.now() - Player.start),
 				    Player.duration);
 				Player.seeker.val(Player.seekPos).change();
+				updateTimeDisplay(Player.seekPos);
 			}
 			Player.seekUpdate = 0;
 
@@ -381,6 +585,7 @@ var player = function(audioFile, containerElem, events, termInfo) {
 				Player.seekUpdate = 1;
 				Player.seeker.val(0).change();
 				Player.seekUpdate = 0;
+				updateTimeDisplay(0);
 				Player.ended = 0;
 				Player.paused = 1;
 				Player.restarted = 1;
@@ -444,15 +649,41 @@ var player = function(audioFile, containerElem, events, termInfo) {
 			}
 		});
 
-		Player.duration = events.duration * 1000;
 		var step = Player.duration > 0 ? Player.duration / 1000 : 1;
-		Player.seeker = $('<input type="range" min="0" max="' +
+		Player.seeker = $('<input type="range" aria-label="Seek" min="0" max="' +
 		    Player.duration + '" step="' + step +
 		    '" value="0">').appendTo(Player.controls);
 
 		Player.maxSeek = Player.duration;
 		Player.seeking = 0;
 		Player.seekUnpause = 0;
+		var pointerScrubbing = false;
+
+		var commitSeek = function(val) {
+			val = Math.max(0, Math.min(val, Player.maxSeek || Player.duration || val));
+			var wasEnded = Player.ended;
+			stopTimers(false);
+			Player.rem = Player.seekTo(val);
+			if (audioFile) {
+				if (Player.audio.readyState > 0) {
+					try {
+						Player.audio.currentTime = val / 1000;
+						Player.pendingSeek = null;
+					} catch (e) {
+						Player.pendingSeek = val / 1000;
+					}
+				} else {
+					Player.pendingSeek = val / 1000;
+				}
+			} else {
+				Player.seekPos = val;
+				Player.baseSeekPos = val;
+			}
+			updateTimeDisplay(val);
+			if (wasEnded && !Player.ended && Player.paused) {
+				setToggleIcon(ICON_PLAY, 'Play');
+			}
+		};
 
 		var rangeEvents = ('PointerEvent' in window) ? {
 			startEvent: ['pointerdown'],
@@ -464,6 +695,10 @@ var player = function(audioFile, containerElem, events, termInfo) {
 			endEvent: ['touchend', 'touchcancel', 'mouseup']
 		};
 
+		$(Player.controls).on(rangeEvents.startEvent.join(' '), '.rangeslider', function() {
+			pointerScrubbing = true;
+		});
+
 		Player.seeker.rangeslider({
 			polyfill: false,
 			startEvent: rangeEvents.startEvent,
@@ -471,7 +706,7 @@ var player = function(audioFile, containerElem, events, termInfo) {
 			endEvent: rangeEvents.endEvent,
 
 			onSlide: function(pos, val) {
-				if (Player.seekUpdate) {
+				if (Player.seekUpdate || !pointerScrubbing) {
 					return;
 				}
 
@@ -481,6 +716,8 @@ var player = function(audioFile, containerElem, events, termInfo) {
 					Player.seeker.val(val).change();
 					Player.seekUpdate = 0;
 				}
+
+				updateTimeDisplay(val);
 
 				if (Player.seeking == 0) {
 					Player.seeking = 1;
@@ -495,6 +732,7 @@ var player = function(audioFile, containerElem, events, termInfo) {
 
 			onSlideEnd: function(pos, val) {
 				if (Player.seekUpdate) {
+					pointerScrubbing = false;
 					return;
 				}
 
@@ -505,34 +743,192 @@ var player = function(audioFile, containerElem, events, termInfo) {
 					Player.seekUpdate = 0;
 				}
 
-				var wasEnded = Player.ended;
-				stopTimers(false);
-				Player.rem = Player.seekTo(val);
-				if (audioFile) {
-					if (Player.audio.readyState > 0) {
-						try {
-							Player.audio.currentTime = val / 1000;
-							Player.pendingSeek = null;
-						} catch (e) {
-							Player.pendingSeek = val / 1000;
-						}
-					} else {
-						Player.pendingSeek = val / 1000;
-					}
-				} else {
-					Player.seekPos = val;
-					Player.baseSeekPos = val;
-				}
-				if (wasEnded && !Player.ended && Player.paused) {
-					setToggleIcon(ICON_PLAY, 'Play');
-				}
+				commitSeek(val);
 				Player.seeking = 0;
+				pointerScrubbing = false;
 				if (Player.seekUnpause) {
 					Player.seekUnpause = 0;
 					if (Player.paused) {
 						Player.toggle.trigger('click');
 					}
 				}
+			}
+		});
+
+		/* Sync keyboard arrow changes on the native range input */
+		Player.seeker.on('input change', function(e, data) {
+			if (Player.seekUpdate || pointerScrubbing || Player.seeking || (data && data.origin)) {
+				return;
+			}
+			var val = parseFloat(Player.seeker.val()) || 0;
+			if (e.type === 'input') {
+				Player.seekUpdate = 1;
+				Player.seeker.change();
+				Player.seekUpdate = 0;
+			}
+			commitSeek(val);
+		});
+
+		Player.timeDisplay = $('<span class="castty-time" aria-label="Playback time"></span>')
+		    .appendTo(Player.controls);
+		Player.timeElapsed = $('<span class="castty-time-elapsed"></span>')
+		    .appendTo(Player.timeDisplay);
+		$('<span class="castty-time-sep" aria-hidden="true"> / </span>')
+		    .appendTo(Player.timeDisplay);
+		Player.timeTotal = $('<span class="castty-time-total"></span>')
+		    .appendTo(Player.timeDisplay);
+		updateTimeDisplay(0);
+
+		if (audioFile) {
+			Player.muteToggle = $('<button id="muteToggle" type="button" aria-label="Mute" aria-pressed="false">' +
+			    ICON_VOLUME + '</button>').appendTo(Player.controls);
+			Player.muteToggle.on('click', function() {
+				if (!Player.audio) {
+					return;
+				}
+				Player.audio.muted = !Player.audio.muted;
+				Player.muteToggle
+				    .html(Player.audio.muted ? ICON_MUTED : ICON_VOLUME)
+				    .attr('aria-label', Player.audio.muted ? 'Unmute' : 'Mute')
+				    .attr('aria-pressed', Player.audio.muted ? 'true' : 'false');
+			});
+		}
+
+		var initSpec = THEMES[Player.themeName] || THEMES['default'];
+		Player.themeToggle = $('<button id="themeToggle" type="button" aria-label="Theme: ' +
+		    initSpec.label + '. Click to switch">' + ICON_THEME + '</button>')
+		    .appendTo(Player.controls);
+		Player.themeToggle.on('click', function() {
+			var idx = $.inArray(Player.themeName, THEME_ORDER);
+			var nextName = THEME_ORDER[(idx + 1) % THEME_ORDER.length];
+			Player.setTheme(nextName);
+		});
+
+		var fsFallbackTimer = null;
+		var clearFsTimer = function() {
+			if (fsFallbackTimer) {
+				clearTimeout(fsFallbackTimer);
+				fsFallbackTimer = null;
+			}
+		};
+
+		var syncFullscreenUi = function(active) {
+			Player.isFullscreen = !!active;
+			Player.root.toggleClass('castty-fullscreen', Player.isFullscreen && !isNativeFullscreen());
+			Player.fullscreenToggle
+			    .html(Player.isFullscreen ? ICON_FULLSCREEN_EXIT : ICON_FULLSCREEN)
+			    .attr('aria-label', Player.isFullscreen ? 'Exit fullscreen' : 'Enter fullscreen')
+			    .attr('aria-pressed', Player.isFullscreen ? 'true' : 'false');
+			Player.layout();
+		};
+
+		Player.fullscreenToggle = $('<button id="fullscreenToggle" type="button" aria-label="Enter fullscreen" aria-pressed="false">' +
+		    ICON_FULLSCREEN + '</button>').appendTo(Player.controls);
+		Player.fullscreenToggle.on('click', function() {
+			var rootEl = Player.root[0];
+			clearFsTimer();
+			if (Player.isFullscreen || isNativeFullscreen()) {
+				if (isNativeFullscreen()) {
+					var exitFn = document.exitFullscreen || document.webkitExitFullscreen;
+					if (exitFn) {
+						try {
+							var exitRes = exitFn.call(document);
+							if (exitRes && typeof exitRes.catch === 'function') {
+								exitRes.catch(function() { syncFullscreenUi(false); });
+							}
+							return;
+						} catch (e) {}
+					}
+				}
+				syncFullscreenUi(false);
+				return;
+			}
+
+			var fsEnabled = document.fullscreenEnabled !== undefined ?
+			    document.fullscreenEnabled : document.webkitFullscreenEnabled;
+			var reqFn = fsEnabled !== false ?
+			    (rootEl.requestFullscreen || rootEl.webkitRequestFullscreen) : null;
+			if (reqFn) {
+				try {
+					var reqRes = reqFn.call(rootEl);
+					if (reqRes && typeof reqRes.then === 'function') {
+						var settled = false;
+						fsFallbackTimer = setTimeout(function() {
+							if (!settled) {
+								settled = true;
+								fsFallbackTimer = null;
+								syncFullscreenUi(true);
+							}
+						}, 150);
+						reqRes.then(function() {
+							if (!settled) {
+								settled = true;
+								clearFsTimer();
+								syncFullscreenUi(true);
+							}
+						}, function() {
+							if (!settled) {
+								settled = true;
+								clearFsTimer();
+								syncFullscreenUi(true);
+							}
+						});
+						return;
+					}
+					syncFullscreenUi(true);
+					return;
+				} catch (e) {}
+			}
+			syncFullscreenUi(true);
+		});
+
+		$(document).on('fullscreenchange webkitfullscreenchange', function() {
+			clearFsTimer();
+			syncFullscreenUi(isNativeFullscreen() || Player.root.hasClass('castty-fullscreen'));
+		});
+
+		$(document).on('keydown', function(e) {
+			if (e.metaKey || e.ctrlKey || e.altKey) {
+				return;
+			}
+			var target = e.target;
+			var tag = target && target.tagName ? target.tagName.toLowerCase() : '';
+			var insidePlayer = $.contains(Player.root[0], target) || target === Player.root[0];
+			if (!insidePlayer && target !== document.body && target !== document.documentElement) {
+				return;
+			}
+
+			if (e.key === 'Escape' && Player.isFullscreen && !isNativeFullscreen()) {
+				e.preventDefault();
+				syncFullscreenUi(false);
+			} else if (e.key === ' ' || e.key === 'k' || e.key === 'K') {
+				if (e.key === ' ' && (tag === 'button' || tag === 'input')) {
+					return;
+				}
+				e.preventDefault();
+				Player.toggle.trigger('click');
+			} else if ((e.key === 'ArrowLeft' || e.key === 'j' || e.key === 'J') && tag !== 'input') {
+				e.preventDefault();
+				var curBack = audioFile ? Player.audio.currentTime * 1000 : Player.seekPos;
+				var nextBack = Math.max(curBack - 5000, 0);
+				Player.seekUpdate = 1;
+				Player.seeker.val(nextBack).change();
+				Player.seekUpdate = 0;
+				commitSeek(nextBack);
+			} else if ((e.key === 'ArrowRight' || e.key === 'l' || e.key === 'L') && tag !== 'input') {
+				e.preventDefault();
+				var curFwd = audioFile ? Player.audio.currentTime * 1000 : Player.seekPos;
+				var nextFwd = Math.min(curFwd + 5000, Player.maxSeek || Player.duration);
+				Player.seekUpdate = 1;
+				Player.seeker.val(nextFwd).change();
+				Player.seekUpdate = 0;
+				commitSeek(nextFwd);
+			} else if ((e.key === 'm' || e.key === 'M') && Player.muteToggle) {
+				e.preventDefault();
+				Player.muteToggle.trigger('click');
+			} else if (e.key === 'f' || e.key === 'F') {
+				e.preventDefault();
+				Player.fullscreenToggle.trigger('click');
 			}
 		});
 
@@ -544,6 +940,7 @@ var player = function(audioFile, containerElem, events, termInfo) {
 			$(Player.audio).on('loadedmetadata durationchange', function() {
 				if (isFinite(Player.audio.duration) && Player.audio.duration > 0) {
 					Player.maxSeek = Player.audio.duration * 1000;
+					updateTimeDisplay(Player.audio.currentTime * 1000);
 				}
 				if (Player.pendingSeek !== null && Player.audio.readyState > 0) {
 					try {
@@ -590,5 +987,15 @@ var player = function(audioFile, containerElem, events, termInfo) {
 		return Player;
 	};
 
-	return init(audioFile, containerElem, events, termInfo);
+	var termInfo = null;
+	var opts = maybeOpts || {};
+	if (termInfoOrOpts && typeof termInfoOrOpts === 'object') {
+		if ('rows' in termInfoOrOpts || 'cols' in termInfoOrOpts) {
+			termInfo = termInfoOrOpts;
+		} else {
+			opts = termInfoOrOpts;
+		}
+	}
+
+	return init(audioFile, containerElem, events, termInfo, opts);
 };
