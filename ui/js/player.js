@@ -15,7 +15,7 @@ var getTimeout = (function() {
 	};
 })();
 
-var player = function(audioFile, containerElem, events) {
+var player = function(audioFile, containerElem, events, termInfo) {
 	var Player = {};
 	var ICON_PLAY = '<i class="material-icons" aria-hidden="true">&#xE037;</i>';
 	var ICON_PAUSE = '<i class="material-icons" aria-hidden="true">&#xE034;</i>';
@@ -26,7 +26,57 @@ var player = function(audioFile, containerElem, events) {
 		Player.toggle.html(icon).attr('aria-label', label);
 	};
 
-	var init = function(audioFile, containerElem, events) {
+	/* Normalize asciicast v1, asciicast v2 (NDJSON), and legacy ttyrec (_tre/_ti) */
+	var normalizeEvents = function(rawEvents, info) {
+		if (typeof rawEvents === 'string') {
+			var lines = rawEvents.split(/\r?\n/);
+			var header = {};
+			var v2Stdout = [];
+			var prevSec = 0;
+			for (var i = 0; i < lines.length; i++) {
+				var line = $.trim(lines[i]);
+				if (!line) {
+					continue;
+				}
+				var parsed = JSON.parse(line);
+				if (!$.isArray(parsed)) {
+					header = parsed;
+				} else if (parsed[1] === 'o') {
+					var tSec = Number(parsed[0]) || 0;
+					v2Stdout.push([Math.max(tSec - prevSec, 0), parsed[2]]);
+					prevSec = tSec;
+				}
+			}
+			return {
+				width: header.width || (info && info.cols) || 80,
+				height: header.height || (info && info.rows) || 24,
+				duration: header.duration || prevSec,
+				stdout: v2Stdout
+			};
+		}
+
+		if ($.isArray(rawEvents)) {
+			var ttyStdout = [];
+			var prevMs = 0;
+			for (var j = 0; j < rawEvents.length; j++) {
+				var ev = rawEvents[j];
+				var ms = Number(ev.s) || 0;
+				ttyStdout.push([Math.max((ms - prevMs) / 1000, 0), ev.e]);
+				prevMs = ms;
+			}
+			return {
+				width: (info && info.cols) || 80,
+				height: (info && info.rows) || 24,
+				duration: prevMs / 1000,
+				stdout: ttyStdout
+			};
+		}
+
+		return rawEvents;
+	};
+
+	var init = function(audioFile, containerElem, events, termInfo) {
+		events = normalizeEvents(events, termInfo);
 		var baseFontSize = 16;
 
 		Player.container = $(containerElem);
@@ -540,5 +590,5 @@ var player = function(audioFile, containerElem, events) {
 		return Player;
 	};
 
-	return init(audioFile, containerElem, events);
+	return init(audioFile, containerElem, events, termInfo);
 };
