@@ -40,10 +40,11 @@ installed to a location other than `/usr/local/`, you will have to edit the
 
 ## Usage
 
-    usage: castty record [-123acDdehlNmprt] [out.cast]
+    usage: castty record [-123AacDdehlmNprt] [out.cast]
      -1             Output asciicast v1 format.
      -2             Output asciicast v2 format.
      -3             Output asciicast v3 format (default).
+     -A             Append to an existing recording instead of overwriting.
      -a <outfile>   Output audio to <outfile>. Must be specified with -d.
      -c <cols>      Use <cols> columns in the recorded shell session.
      -D <outfile>   Send debugging information into <outfile>.

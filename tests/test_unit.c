@@ -9,9 +9,11 @@
 #include <soundio/soundio.h>
 
 #include "audio.h"
+#include "audio/pcm.h"
 #include "audio/writer.h"
 #include "audio/writer-lame.h"
 #include "audio/writer-raw.h"
+#include "cast.h"
 #include "json.h"
 
 #ifdef WITH_LAME
@@ -130,6 +132,136 @@ test_writer_raw(void)
 	assert(fread(got, 1, sizeof got, fp) == sizeof got);
 	assert(memcmp(got, payload, sizeof payload) == 0);
 	fclose(fp);
+}
+
+static void
+test_pcm_roundtrip_and_fade(void)
+{
+	enum SoundIoFormat fmts[] = {
+		SoundIoFormatS8, SoundIoFormatU8,
+		SoundIoFormatS16LE, SoundIoFormatS16BE,
+		SoundIoFormatU16LE, SoundIoFormatU16BE,
+		SoundIoFormatS24LE, SoundIoFormatS24BE,
+		SoundIoFormatU24LE, SoundIoFormatU24BE,
+		SoundIoFormatS32LE, SoundIoFormatS32BE,
+		SoundIoFormatU32LE, SoundIoFormatU32BE,
+		SoundIoFormatFloat32LE, SoundIoFormatFloat32BE,
+		SoundIoFormatFloat64LE, SoundIoFormatFloat64BE,
+	};
+	unsigned char buf[16];
+	size_t i;
+
+	for (i = 0; i < sizeof fmts / sizeof fmts[0]; i++) {
+		float in = 12345.0f, out;
+
+		pcm_encode_sample(fmts[i], buf, in);
+		out = pcm_decode_sample(fmts[i], buf);
+		assert(fabsf(out - in) < 300.0f);
+
+		/* Verify positive clamp avoids signed wraparound */
+		pcm_encode_sample(fmts[i], buf, 40000.0f);
+		out = pcm_decode_sample(fmts[i], buf);
+		assert(out > 30000.0f);
+	}
+
+	/* Verify fade-out reaches 0 at tail and fade-in starts at 0 */
+	{
+		float frames[8 * 2];
+		int f;
+
+		for (f = 0; f < 8; f++) {
+			frames[f * 2] = 0.5f;
+			frames[f * 2 + 1] = -0.5f;
+		}
+		pcm_fade_frames(SoundIoFormatFloat32NE, (unsigned char *)frames,
+		    8, 2, 8, 4, 0, 8, 1);
+		assert(fabsf(frames[0]) > 0.40f);
+		assert(fabsf(frames[7 * 2]) < 1e-6f);
+		assert(fabsf(frames[7 * 2 + 1]) < 1e-6f);
+
+		for (f = 0; f < 8; f++) {
+			frames[f * 2] = 0.5f;
+			frames[f * 2 + 1] = -0.5f;
+		}
+		pcm_fade_frames(SoundIoFormatFloat32NE, (unsigned char *)frames,
+		    8, 2, 8, 4, 0, 8, 0);
+		assert(fabsf(frames[0]) < 1e-6f);
+		assert(fabsf(frames[1]) < 1e-6f);
+		assert(fabsf(frames[7 * 2]) > 0.45f);
+	}
+}
+
+static void
+write_str_file(const char *path, const char *s)
+{
+	FILE *fp = fopen(path, "wb");
+
+	assert(fp != NULL);
+	assert(fwrite(s, 1, strlen(s), fp) == strlen(s));
+	fclose(fp);
+}
+
+static void
+test_cast_inspect(void)
+{
+	char path[] = "/tmp/castty_unit_cast_XXXXXX";
+	char errbuf[256];
+	struct cast_append_info info;
+	int fd;
+
+	assert(cast_inspect("/tmp/castty_definitely_missing_file_xyz", 0, &info,
+	    errbuf, sizeof errbuf) == 0);
+	assert(info.exists == 0);
+
+	fd = mkstemp(path);
+	assert(fd >= 0);
+	close(fd);
+
+	/* v3 with embedded brackets/escapes, resize event, no trailing newline */
+	write_str_file(path,
+	    "{\"version\": 3, \"term\": {\"cols\": 80, \"rows\": 24}}\n"
+	    "[0.5000,\"o\",\"hi \\\"[0]\\\"\"]\n"
+	    "[0.2500,\"r\",\"110x33\"]\n"
+	    "[0.2500,\"x\",\"0\"]");
+	assert(cast_inspect(path, 0, &info, errbuf, sizeof errbuf) == 0);
+	assert(info.exists == 1);
+	assert(info.version == 3);
+	assert(info.cols == 110 && info.rows == 33);
+	assert(fabs(info.dur_ms - 1000.0) < 0.01);
+	assert(info.need_newline == 1);
+	assert(cast_inspect(path, 2, &info, errbuf, sizeof errbuf) != 0);
+	cast_append_info_free(&info);
+
+	/* v2 cumulative timestamps + resize */
+	write_str_file(path,
+	    "{\"version\": 2, \"width\": 80, \"height\": 24}\n"
+	    "[0.4000,\"o\",\"a\"]\n"
+	    "[1.7500,\"r\",\"100x28\"]\n");
+	assert(cast_inspect(path, 0, &info, errbuf, sizeof errbuf) == 0);
+	assert(info.version == 2);
+	assert(info.cols == 100 && info.rows == 28);
+	assert(fabs(info.dur_ms - 1750.0) < 0.01);
+	assert(info.need_newline == 0);
+	cast_append_info_free(&info);
+
+	/* v1 with duration before stdout */
+	write_str_file(path,
+	    "{\"version\": 1, \"duration\": 1.5, \"width\": 90, \"height\": 30, "
+	    "\"stdout\": [[0.25, \"x\"], [0.5, \"y\"]]}\n");
+	assert(cast_inspect(path, 1, &info, errbuf, sizeof errbuf) == 0);
+	assert(info.version == 1);
+	assert(info.cols == 90 && info.rows == 30);
+	assert(fabs(info.v1_events_ms - 750.0) < 0.01);
+	assert(fabs(info.dur_ms - 1500.0) < 0.01);
+	assert(info.v1_empty == 0);
+	assert(info.v1_rewrite_buf != NULL);
+	cast_append_info_free(&info);
+
+	/* Invalid file rejected cleanly */
+	write_str_file(path, "not valid json\n");
+	assert(cast_inspect(path, 0, &info, errbuf, sizeof errbuf) != 0);
+
+	unlink(path);
 }
 
 #ifdef WITH_LAME
@@ -358,6 +490,8 @@ main(int argc, char **argv)
 	test_json_escape();
 	test_audio_paused_lifecycle();
 	test_writer_raw();
+	test_pcm_roundtrip_and_fade();
+	test_cast_inspect();
 #ifdef WITH_LAME
 	test_writer_lame();
 #endif

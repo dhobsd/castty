@@ -12,10 +12,10 @@ endif
 
 CFLAGS = -O2 -I../include -std=c11 -MMD -MP $(WARNINGS)
 LDFLAGS = -O2 -L/usr/local/lib
-LDLIBS = -lsoundio -lpthread
+LDLIBS = -lsoundio -lpthread -lm
 
 TARGET := castty
-OBJ := audio.o castty.o input.o json.o output.o record.o shell.o signals.o term.o xwrap.o audio/writer-raw.o
+OBJ := audio.o cast.o castty.o input.o json.o output.o record.o shell.o signals.o term.o xwrap.o audio/pcm.o audio/writer-raw.o
 
 # Optional dependency libmp3lame (default: yes)
 ifneq ("$(WITH_LAME)", "no")

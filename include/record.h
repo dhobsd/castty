@@ -7,6 +7,8 @@
 #include <signal.h>
 #include <time.h>
 
+#include "cast.h"
+
 enum control_command {
 	CMD_NONE,
 	CMD_MUTE,
@@ -26,6 +28,7 @@ extern volatile sig_atomic_t tty_saved;
 
 struct outargs {
 	int start_paused;
+	int append;
 	int controlfd;
 	int masterfd;
 	int rows;
@@ -34,6 +37,7 @@ struct outargs {
 	int use_raw;
 	pid_t shellpid;
 	time_t timestamp;
+	struct cast_append_info append_info;
 
 	const char *cmd;
 	const char *env;

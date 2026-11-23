@@ -1,11 +1,12 @@
 #include <assert.h>
+#include <fcntl.h>
 #include <lame/lame.h>
 #include <soundio/soundio.h>
-#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <string.h>
+#include <unistd.h>
 
+#include "audio/pcm.h"
 #include "audio/writer-lame.h"
 #include "audio/writer.h"
 
@@ -19,189 +20,6 @@ struct lame {
 	int frame_cap;
 	int nchannels;
 };
-
-static uint16_t
-read_u16le(const unsigned char *p)
-{
-	return (uint16_t)p[0] | ((uint16_t)p[1] << 8);
-}
-
-static uint16_t
-read_u16be(const unsigned char *p)
-{
-	return ((uint16_t)p[0] << 8) | (uint16_t)p[1];
-}
-
-static uint32_t
-read_u32le(const unsigned char *p)
-{
-	return (uint32_t)p[0] |
-	    ((uint32_t)p[1] << 8) |
-	    ((uint32_t)p[2] << 16) |
-	    ((uint32_t)p[3] << 24);
-}
-
-static uint32_t
-read_u32be(const unsigned char *p)
-{
-	return ((uint32_t)p[0] << 24) |
-	    ((uint32_t)p[1] << 16) |
-	    ((uint32_t)p[2] << 8) |
-	    (uint32_t)p[3];
-}
-
-static uint64_t
-read_u64le(const unsigned char *p)
-{
-	return (uint64_t)read_u32le(p) | ((uint64_t)read_u32le(p + 4) << 32);
-}
-
-static uint64_t
-read_u64be(const unsigned char *p)
-{
-	return ((uint64_t)read_u32be(p) << 32) | (uint64_t)read_u32be(p + 4);
-}
-
-static float
-decode_s24(uint32_t w)
-{
-	uint32_t u = w & 0xffffffu;
-	int32_t s = (int32_t)(u ^ 0x800000u) - 0x800000;
-
-	return (float)s / 256.0f;
-}
-
-static float
-decode_u24(uint32_t w)
-{
-	uint32_t u = w & 0xffffffu;
-
-	return ((float)u - 8388608.0f) / 256.0f;
-}
-
-static float
-decode_s32(uint32_t u)
-{
-	int32_t s;
-
-	memcpy(&s, &u, sizeof s);
-	return (float)((double)s / 65536.0);
-}
-
-static float
-decode_u32(uint32_t u)
-{
-	return (float)(((double)u - 2147483648.0) / 65536.0);
-}
-
-static float
-decode_f32(uint32_t u)
-{
-	float f;
-
-	memcpy(&f, &u, sizeof f);
-	return f * 32768.0f;
-}
-
-static float
-decode_f64(uint64_t u)
-{
-	double d;
-
-	memcpy(&d, &u, sizeof d);
-	return (float)(d * 32768.0);
-}
-
-static int
-format_sample_bytes(enum SoundIoFormat fmt)
-{
-	switch (fmt) {
-	case SoundIoFormatS8:
-	case SoundIoFormatU8:
-		return 1;
-	case SoundIoFormatS16LE:
-	case SoundIoFormatS16BE:
-	case SoundIoFormatU16LE:
-	case SoundIoFormatU16BE:
-		return 2;
-	case SoundIoFormatS24LE:
-	case SoundIoFormatS24BE:
-	case SoundIoFormatU24LE:
-	case SoundIoFormatU24BE:
-	case SoundIoFormatS32LE:
-	case SoundIoFormatS32BE:
-	case SoundIoFormatU32LE:
-	case SoundIoFormatU32BE:
-	case SoundIoFormatFloat32LE:
-	case SoundIoFormatFloat32BE:
-		return 4;
-	case SoundIoFormatFloat64LE:
-	case SoundIoFormatFloat64BE:
-		return 8;
-	default:
-		return 0;
-	}
-}
-
-static float
-decode_sample(enum SoundIoFormat fmt, const unsigned char *p)
-{
-	switch (fmt) {
-	case SoundIoFormatS8: {
-		int8_t s;
-
-		memcpy(&s, p, sizeof s);
-		return (float)s * 256.0f;
-	}
-	case SoundIoFormatU8:
-		return ((float)p[0] - 128.0f) * 256.0f;
-	case SoundIoFormatS16LE: {
-		uint16_t u = read_u16le(p);
-		int16_t s;
-
-		memcpy(&s, &u, sizeof s);
-		return (float)s;
-	}
-	case SoundIoFormatS16BE: {
-		uint16_t u = read_u16be(p);
-		int16_t s;
-
-		memcpy(&s, &u, sizeof s);
-		return (float)s;
-	}
-	case SoundIoFormatU16LE:
-		return (float)read_u16le(p) - 32768.0f;
-	case SoundIoFormatU16BE:
-		return (float)read_u16be(p) - 32768.0f;
-	case SoundIoFormatS24LE:
-		return decode_s24(read_u32le(p));
-	case SoundIoFormatS24BE:
-		return decode_s24(read_u32be(p));
-	case SoundIoFormatU24LE:
-		return decode_u24(read_u32le(p));
-	case SoundIoFormatU24BE:
-		return decode_u24(read_u32be(p));
-	case SoundIoFormatS32LE:
-		return decode_s32(read_u32le(p));
-	case SoundIoFormatS32BE:
-		return decode_s32(read_u32be(p));
-	case SoundIoFormatU32LE:
-		return decode_u32(read_u32le(p));
-	case SoundIoFormatU32BE:
-		return decode_u32(read_u32be(p));
-	case SoundIoFormatFloat32LE:
-		return decode_f32(read_u32le(p));
-	case SoundIoFormatFloat32BE:
-		return decode_f32(read_u32be(p));
-	case SoundIoFormatFloat64LE:
-		return decode_f64(read_u64le(p));
-	case SoundIoFormatFloat64BE:
-		return decode_f64(read_u64be(p));
-	default:
-		fprintf(stderr, "Invalid format\n");
-		exit(EXIT_FAILURE);
-	}
-}
 
 static void
 lame_write(struct audio_writer *writer, enum SoundIoFormat fmt, char *data, int size,
@@ -220,7 +38,7 @@ lame_write(struct audio_writer *writer, enum SoundIoFormat fmt, char *data, int 
 	}
 
 	lame = writer->context;
-	sample_bytes = format_sample_bytes(fmt);
+	sample_bytes = pcm_sample_bytes(fmt);
 	if (sample_bytes == 0 || bytes_per_frame != lame->nchannels * sample_bytes) {
 		fprintf(stderr, "Invalid audio format or frame size\n");
 		exit(EXIT_FAILURE);
@@ -242,9 +60,9 @@ lame_write(struct audio_writer *writer, enum SoundIoFormat fmt, char *data, int 
 		for (i = 0; i < chunk; i++) {
 			const unsigned char *frame = src + (size_t)bytes_per_frame * i;
 
-			lame->lbuf[i] = decode_sample(fmt, frame);
+			lame->lbuf[i] = pcm_decode_sample(fmt, frame);
 			lame->rbuf[i] = lame->nchannels > 1 ?
-			    decode_sample(fmt, frame + sample_bytes) : lame->lbuf[i];
+			    pcm_decode_sample(fmt, frame + sample_bytes) : lame->lbuf[i];
 		}
 
 		blen = lame_encode_buffer_float(lame->lflags, lame->lbuf,
@@ -268,7 +86,7 @@ static void
 lame_destroy(struct audio_writer *writer)
 {
 	struct lame *lame;
-	int blen;
+	int blen, fd, fl;
 
 	assert(writer);
 	lame = writer->context;
@@ -279,6 +97,15 @@ lame_destroy(struct audio_writer *writer)
 		perror("fwrite");
 	} else if (blen < 0) {
 		fprintf(stderr, "lame_encode_flush failed: %d\n", blen);
+	}
+
+	fflush(lame->outfile);
+	fd = fileno(lame->outfile);
+	fl = (fd >= 0) ? fcntl(fd, F_GETFL) : -1;
+	if (fl != -1 && (fl & O_ACCMODE) == O_RDWR &&
+	    lseek(fd, 0, SEEK_CUR) >= 0) {
+		lame_mp3_tags_fid(lame->lflags, lame->outfile);
+		fflush(lame->outfile);
 	}
 
 	lame_close(lame->lflags);

@@ -21,10 +21,26 @@
 
 static int audio_enabled, paused, start_paused;
 static int first = 1;
+static int v1_need_comma = 1;
+static int need_append_resize, append_cols, append_rows;
+static int audio_sync_done;
 static struct timeval prevtv, nowtv;
-static double aprev, anow, dur;
+static double aprev, anow, dur, pending_cast_offset_ms;
 static FILE *evout;
 static int master;
+
+static void
+sync_audio_clock(void)
+{
+	if (!audio_sync_done) {
+		double gap = audio_clock_ms() - dur;
+
+		if (gap > pending_cast_offset_ms) {
+			pending_cast_offset_ms = gap;
+		}
+		audio_sync_done = 1;
+	}
+}
 
 /*
  * Always drive timing from the audio sample clock when recording audio so
@@ -41,6 +57,7 @@ next_delta_ms(int start_audio)
 		if (audio_enabled) {
 			if (start_audio && !start_paused) {
 				audio_start();
+				sync_audio_clock();
 			}
 			anow = aprev = audio_clock_ms();
 		} else {
@@ -70,6 +87,10 @@ next_delta_ms(int start_audio)
 		prevtv = nowtv;
 	}
 
+	if (pending_cast_offset_ms > 0.0) {
+		delta += pending_cast_offset_ms;
+		pending_cast_offset_ms = 0.0;
+	}
 	dur += delta;
 	return delta;
 }
@@ -93,6 +114,7 @@ handle_command(const struct control_msg *msg, int format_version)
 			xwrite(master, &c_l, 1);
 			if (audio_enabled) {
 				audio_start();
+				sync_audio_clock();
 				anow = aprev = audio_clock_ms();
 			} else {
 				gettimeofday(&prevtv, NULL);
@@ -109,6 +131,7 @@ handle_command(const struct control_msg *msg, int format_version)
 		if (!paused && (format_version == 2 || format_version == 3)) {
 			double rdelta = next_delta_ms(1);
 			double rtime = (format_version == 3) ? rdelta : dur;
+			need_append_resize = 0;
 			fprintf(evout, "[%0.4f,\"r\",\"%hux%hu\"]\n",
 			    rtime / 1000, msg->cols, msg->rows);
 		}
@@ -124,6 +147,16 @@ handle_input(unsigned char *buf, size_t buflen, int format_version)
 {
 	assert(format_version == 1 || format_version == 2 ||
 	    format_version == 3);
+
+	if (need_append_resize) {
+		double rdelta = next_delta_ms(1);
+		double rtime = (format_version == 3) ? rdelta : dur;
+
+		fprintf(evout, "[%0.4f,\"r\",\"%dx%d\"]\n",
+		    rtime / 1000, append_cols, append_rows);
+		need_append_resize = 0;
+	}
+
 	double delta = next_delta_ms(1);
 
 	if (format_version == 3) {
@@ -131,7 +164,9 @@ handle_input(unsigned char *buf, size_t buflen, int format_version)
 	} else if (format_version == 2) {
 		fprintf(evout, "[%0.4f,\"o\",\"", dur / 1000);
 	} else if (format_version == 1) {
-		fprintf(evout, ",[%0.4f,\"", delta / 1000);
+		fprintf(evout, "%s[%0.4f,\"", v1_need_comma ? "," : "",
+		    delta / 1000);
+		v1_need_comma = 1;
 	}
 
 	uint32_t state, cp;
@@ -187,69 +222,125 @@ outputproc(struct outargs *oa)
 		assert(oa->audioout && oa->devid);
 	}
 
+	int appending = (oa->append && oa->append_info.exists);
+
 	if (oa->audioout) {
 		audio_enabled = 1;
-		audio_init(oa->devid, oa->audioout, oa->use_raw);
+		audio_init_append(oa->devid, oa->audioout, oa->use_raw,
+		    oa->append, appending ? oa->append_info.dur_ms : 0.0);
 	}
 
 	start_paused = paused = oa->start_paused;
 
-	evout = xfopen(oa->outfn, "wb");
-
-	/* Write asciicast header and append events. Format defined at
-	 * v1 https://github.com/asciinema/asciinema/blob/master/doc/asciicast-v1.md
-	 * v2 https://github.com/asciinema/asciinema/blob/master/doc/asciicast-v2.md
-	 * v3 https://docs.asciinema.org/manual/asciicast/v3/
-	 *
-	 * With v1, we insert an empty first record to avoid the hassle of dealing with
-	 * ES (still) not supporting trailing commas.
-	 */
-	if (oa->format_version == 3) {
-		fprintf(evout, "{\"version\": 3, \"term\": {\"cols\": %d, \"rows\": %d",
-		    oa->cols, oa->rows);
-		if (oa->term_type && *oa->term_type) {
-			fprintf(evout, ", \"type\": \"%s\"", oa->term_type);
+	if (appending) {
+		dur = oa->append_info.dur_ms;
+		if (oa->format_version == 1) {
+			evout = xfopen(oa->outfn, "r+b");
+			if (oa->append_info.v1_rewrite_buf != NULL) {
+				rewind(evout);
+				if (fwrite(oa->append_info.v1_rewrite_buf, 1,
+				    oa->append_info.v1_rewrite_len, evout) !=
+				    oa->append_info.v1_rewrite_len) {
+					perror("fwrite");
+					exit(EXIT_FAILURE);
+				}
+				fflush(evout);
+				if (ftruncate(fileno(evout),
+				    (off_t)oa->append_info.v1_rewrite_len) != 0) {
+					perror("ftruncate");
+					exit(EXIT_FAILURE);
+				}
+			} else {
+				if (fseeko(evout,
+				    (off_t)oa->append_info.v1_truncate_off,
+				    SEEK_SET) != 0 ||
+				    ftruncate(fileno(evout),
+				    (off_t)oa->append_info.v1_truncate_off) != 0) {
+					perror("ftruncate");
+					exit(EXIT_FAILURE);
+				}
+			}
+			v1_need_comma = !oa->append_info.v1_empty;
+			if (oa->append_info.dur_ms >
+			    oa->append_info.v1_events_ms) {
+				pending_cast_offset_ms =
+				    oa->append_info.dur_ms -
+				    oa->append_info.v1_events_ms;
+			}
+		} else {
+			evout = xfopen(oa->outfn, "ab");
+			if (oa->append_info.need_newline) {
+				fputc('\n', evout);
+			}
+			if (oa->cols > 0 && oa->rows > 0 &&
+			    (oa->cols != oa->append_info.cols ||
+			    oa->rows != oa->append_info.rows)) {
+				need_append_resize = 1;
+				append_cols = oa->cols;
+				append_rows = oa->rows;
+			}
 		}
-		if (oa->term_version && *oa->term_version) {
-			fprintf(evout, ", \"version\": \"%s\"", oa->term_version);
-		}
-		if (oa->theme_json && *oa->theme_json) {
-			fprintf(evout, ", \"theme\": %s", oa->theme_json);
-		}
-		fprintf(evout, "}, \"timestamp\": %lld", (long long)oa->timestamp);
-		if (oa->cmd && *oa->cmd) {
-			fprintf(evout, ", \"command\": \"%s\"", oa->cmd);
-		}
-		if (oa->title && *oa->title) {
-			fprintf(evout, ", \"title\": \"%s\"", oa->title);
-		}
-		if (oa->env && *oa->env) {
-			fprintf(evout, ", \"env\": %s", oa->env);
-		}
-		fprintf(evout, "}\n");
 	} else {
-		fprintf(evout,
-		    "{\"version\": %d, "
-		    "\"width\": %d, "
-		    "\"height\": %d, "
-		    "\"command\": \"%s\", "
-		    "\"title\": \"%s\", "
-		    "\"env\": %s",
-		    oa->format_version,
-		    oa->cols, oa->rows,
-		    oa->cmd ? oa->cmd : "",
-		    oa->title ? oa->title : "",
-		    oa->env
-		);
-		if (oa->format_version == 2 && oa->theme_json && *oa->theme_json) {
-			fprintf(evout, ", \"theme\": %s", oa->theme_json);
-		}
-		if (oa->format_version == 2) {
-			// v2 header finished here, data will be appended in separate lines
+		evout = xfopen(oa->outfn, "wb");
+
+		/* Write asciicast header and append events. Format defined at
+		 * v1 https://github.com/asciinema/asciinema/blob/master/doc/asciicast-v1.md
+		 * v2 https://github.com/asciinema/asciinema/blob/master/doc/asciicast-v2.md
+		 * v3 https://docs.asciinema.org/manual/asciicast/v3/
+		 *
+		 * With v1, we insert an empty first record to avoid the hassle of dealing with
+		 * ES (still) not supporting trailing commas.
+		 */
+		if (oa->format_version == 3) {
+			fprintf(evout,
+			    "{\"version\": 3, \"term\": {\"cols\": %d, \"rows\": %d",
+			    oa->cols, oa->rows);
+			if (oa->term_type && *oa->term_type) {
+				fprintf(evout, ", \"type\": \"%s\"", oa->term_type);
+			}
+			if (oa->term_version && *oa->term_version) {
+				fprintf(evout, ", \"version\": \"%s\"", oa->term_version);
+			}
+			if (oa->theme_json && *oa->theme_json) {
+				fprintf(evout, ", \"theme\": %s", oa->theme_json);
+			}
+			fprintf(evout, "}, \"timestamp\": %lld",
+			    (long long)oa->timestamp);
+			if (oa->cmd && *oa->cmd) {
+				fprintf(evout, ", \"command\": \"%s\"", oa->cmd);
+			}
+			if (oa->title && *oa->title) {
+				fprintf(evout, ", \"title\": \"%s\"", oa->title);
+			}
+			if (oa->env && *oa->env) {
+				fprintf(evout, ", \"env\": %s", oa->env);
+			}
 			fprintf(evout, "}\n");
-		} else if (oa->format_version == 1) {
-			// v1 header finished, console data is appended in structure
-			fprintf(evout, ",\"stdout\":[[0,\"\"]\n");
+		} else {
+			fprintf(evout,
+			    "{\"version\": %d, "
+			    "\"width\": %d, "
+			    "\"height\": %d, "
+			    "\"command\": \"%s\", "
+			    "\"title\": \"%s\", "
+			    "\"env\": %s",
+			    oa->format_version,
+			    oa->cols, oa->rows,
+			    oa->cmd ? oa->cmd : "",
+			    oa->title ? oa->title : "",
+			    oa->env
+			);
+			if (oa->format_version == 2 && oa->theme_json &&
+			    *oa->theme_json) {
+				fprintf(evout, ", \"theme\": %s", oa->theme_json);
+			}
+			if (oa->format_version == 2) {
+				// v2 header finished here, data will be appended in separate lines
+				fprintf(evout, "}\n");
+			} else if (oa->format_version == 1) {
+				// v1 header finished, console data is appended in structure
+				fprintf(evout, ",\"stdout\":[[0,\"\"]\n");
+			}
 		}
 	}
 
