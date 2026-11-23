@@ -16,6 +16,7 @@ enum control_command {
 	CMD_PAUSE,
 	CMD_RESIZE,
 	CMD_MARKER,
+	CMD_MARKER_PROMPT,
 	CMD_HUD_TOGGLE,
 };
 
@@ -26,6 +27,8 @@ struct control_msg {
 	unsigned short outer_rows;
 	unsigned short outer_cols;
 	enum hud_mode hud_mode;
+	unsigned char prompt_active;
+	char label[64];
 };
 
 extern volatile sig_atomic_t ctrl_write_fd;

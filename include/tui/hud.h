@@ -63,6 +63,10 @@ struct hud_state {
 	int tl_count;
 	uint64_t tl_last_step;
 	uint8_t cur_tl_flags;
+
+	int prompt_active;
+	char prompt_buf[64];
+	char last_marker_label[64];
 };
 
 int hud_parse_mode(const char *arg, enum hud_mode *out);
@@ -73,6 +77,9 @@ void hud_init(struct hud_state *st, int paused, int append, int audio_enabled,
     const char *audio_fmt, int initial_markers, double initial_ms);
 void hud_note_output(struct hud_state *st);
 void hud_note_marker(struct hud_state *st, double at_ms);
+void hud_note_marker_label(struct hud_state *st, double at_ms,
+    const char *label);
+void hud_set_prompt(struct hud_state *st, int active, const char *text);
 void hud_note_pause(struct hud_state *st, int paused);
 void hud_tick(struct hud_state *st, double elapsed_ms,
     const struct audio_vu *vu);

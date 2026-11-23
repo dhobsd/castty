@@ -437,9 +437,12 @@ class TestRecordingAndFormats(unittest.TestCase):
                 send_seq=[
                     (0.08, b"hello_hud\n"),
                     (0.18, b"\x01k"),
-                    (0.28, b"\x01h"),
-                    (0.38, b"\x01h"),
-                    (0.48, b"\x04"),
+                    (0.26, b"\x01KIntro_ty\x7f\x7f\x7f\r"),
+                    (0.36, b"\x01KDiscardMe\x1b"),
+                    (0.46, b'\x01KPart \x1b[D2: "Build"\n'),
+                    (0.56, b"\x01h"),
+                    (0.66, b"\x01h"),
+                    (0.76, b"\x04"),
                 ],
             )
             self.assertEqual(rc, 0, msg=err)
@@ -447,6 +450,7 @@ class TestRecordingAndFormats(unittest.TestCase):
             self.assertIn("REC", out_s)
             self.assertIn("MK:00", out_s)
             self.assertIn("M:01", out_s)
+            self.assertIn("Chapter:", out_s)
             self.assertIn("hello_hud", out_s)
 
             with open(cast_side, "r", encoding="utf-8") as f:
@@ -458,7 +462,13 @@ class TestRecordingAndFormats(unittest.TestCase):
             resizes = [ev[2] for ev in lines[1:] if ev[1] == "r"]
             self.assertIn("hello_hud", outs)
             self.assertNotIn("REC", outs)
-            self.assertEqual(len(markers), 1)
+            self.assertNotIn("Chapter:", outs)
+            self.assertNotIn("DiscardMe", outs)
+            self.assertNotIn("Intro", outs)
+            self.assertEqual(
+                [m[2] for m in markers],
+                ["", "Intro", 'Part 2: "Build"'],
+            )
             self.assertEqual(resizes, ["120x24", "112x24"])
 
             # Bottom HUD on 24x80 reserves 1 row (80x23).

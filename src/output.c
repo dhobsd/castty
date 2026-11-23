@@ -16,6 +16,7 @@
 
 #include "audio.h"
 #include "castty.h"
+#include "json.h"
 #include "record.h"
 #include "tui/hud.h"
 #include "tui/screen.h"
@@ -90,7 +91,8 @@ render_compositor(int draw_hud)
 	}
 	tui_surface_begin(sf_comp);
 	tui_vterm_blit(vt_comp, sf_comp, 0, 0);
-	if (draw_hud && hud_lay.active_mode != HUD_OFF) {
+	if (draw_hud &&
+	    (hud_lay.active_mode != HUD_OFF || hud_st.prompt_active)) {
 		hud_render(&hud_st, &hud_lay, sf_comp);
 	}
 	tui_vterm_get_cursor(vt_comp, &cr, &cc, &cvis, &cshape);
@@ -233,26 +235,35 @@ handle_command(const struct control_msg *msg, int format_version)
 		}
 		break;
 
-	case CMD_MARKER:
+	case CMD_MARKER_PROMPT:
+		hud_set_prompt(&hud_st, msg->prompt_active, msg->label);
+		break;
+
+	case CMD_MARKER: {
+		char *esc = json_escape(msg->label);
+
+		hud_set_prompt(&hud_st, 0, NULL);
 		if (!paused) {
 			double mdelta = next_delta_ms(1);
 			double mtime = (format_version == 3) ? mdelta : dur;
 
 			if (format_version == 2 || format_version == 3) {
-				fprintf(evout, "[%0.4f,\"m\",\"\"]\n",
-				    mtime / 1000);
+				fprintf(evout, "[%0.4f,\"m\",\"%s\"]\n",
+				    mtime / 1000, esc);
 			}
-			hud_note_marker(&hud_st, dur);
+			hud_note_marker_label(&hud_st, dur, msg->label);
 		} else {
 			if (format_version == 2 || format_version == 3) {
 				double mtime = (format_version == 3) ? 0.0 : dur;
 
-				fprintf(evout, "[%0.4f,\"m\",\"\"]\n",
-				    mtime / 1000);
+				fprintf(evout, "[%0.4f,\"m\",\"%s\"]\n",
+				    mtime / 1000, esc);
 			}
-			hud_note_marker(&hud_st, dur);
+			hud_note_marker_label(&hud_st, dur, msg->label);
 		}
+		free(esc);
 		break;
+	}
 
 	case CMD_RESIZE:
 	case CMD_HUD_TOGGLE:
@@ -514,7 +525,8 @@ outputproc(struct outargs *oa)
 
 	for (;;) {
 		int nready;
-		int timeout_ms = (hud_lay.active_mode != HUD_OFF) ? 50 : -1;
+		int timeout_ms = (hud_lay.active_mode != HUD_OFF ||
+		    hud_st.prompt_active) ? 50 : -1;
 
 		nready = poll(pollfds, 2, timeout_ms);
 		if (nready == -1 && errno == EINTR) {
