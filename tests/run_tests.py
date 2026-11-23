@@ -239,28 +239,31 @@ class TestRecordingAndFormats(unittest.TestCase):
     def test_start_paused_and_ctrl_a_passthrough(self):
         with tempfile.TemporaryDirectory(prefix="castty_ctrl_") as d:
             cast_path = os.path.join(d, "ctrl.cast")
-            # Send paused text, unpause (^a p), literal ^a (^a a and ^a ^a),
-            # visible text, newline, and EOF (^d).
+            # Send paused text, unpause (^a p), literal ^a (^a a and ^a ^a)
+            # bundled in one write, split across two writes, and a single EOF (^d).
             rc, dt, _, err = run_in_pty(
                 ["record", "-N", "-p", "-e", "cat", cast_path],
                 wait_for=b"\x1b[H",
                 send_seq=[
                     (0.05, b"paused_hidden\n"),
                     (0.15, b"\x01p"),
-                    (0.25, b"visible "),
-                    (0.32, b"\x01a"),
-                    (0.40, b"\x01\x01"),
-                    (0.50, b"\n"),
-                    (0.60, b"\x04"),
+                    (0.25, b"visible \x01a\x01\x01!\n"),
+                    (0.35, b"split\x01"),
+                    (0.42, b"a_end\n"),
+                    (0.50, b"\x01"),
+                    (0.57, b"\x01ok\n"),
+                    (0.65, b"\x04"),
                 ],
             )
             self.assertEqual(rc, 0, msg=err)
             self.assertLess(dt, 3.0)
             with open(cast_path, "r", encoding="utf-8") as f:
-                content = f.read()
-            self.assertNotIn("paused_hidden", content)
-            self.assertIn("visible", content)
-            self.assertTrue("^A^A" in content or "\\u0001\\u0001" in content)
+                lines = [json.loads(line) for line in f]
+            outs = "".join(ev[2] for ev in lines[1:] if ev[1] == "o")
+            self.assertNotIn("paused_hidden", outs)
+            self.assertIn("visible \x01\x01!", outs)
+            self.assertIn("split\x01_end", outs)
+            self.assertIn("\x01ok", outs)
 
     def test_asciicast_v1_v2_v3_and_upgrade(self):
         with tempfile.TemporaryDirectory(prefix="castty_fmt_") as d:

@@ -57,47 +57,43 @@ inputproc(int masterfd, int controlfd, int chldfd)
 	input_state = STATE_PASSTHROUGH;
 
 	while ((nread = read_input(chldfd, ibuf, BUFSIZ)) > 0) {
-		unsigned char *cmdstart;
-
 		p = ibuf;
 
-		cmdstart = memchr(ibuf, 0x01, nread);
-		if (cmdstart) {
+		while (nread > 0) {
 			switch (input_state) {
-			case STATE_PASSTHROUGH:
-				/* Switching into command mode: pass through anything
-				 * preceding our command
-				 */
-				if (cmdstart > ibuf) {
-					xwrite(masterfd, ibuf, cmdstart - ibuf);
+			case STATE_PASSTHROUGH: {
+				unsigned char *cmdstart = memchr(p, 0x01,
+				    (size_t)nread);
+
+				if (cmdstart == NULL) {
+					xwrite(masterfd, p, (size_t)nread);
+					nread = 0;
+				} else {
+					ssize_t prefix = cmdstart - p;
+
+					if (prefix > 0) {
+						xwrite(masterfd, p,
+						    (size_t)prefix);
+					}
+					p = cmdstart + 1;
+					nread -= prefix + 1;
+					input_state = STATE_COMMAND;
 				}
-				cmdstart++;
-				nread -= (cmdstart - ibuf);
-
-				p = cmdstart;
-				input_state = STATE_COMMAND;
-
-				break;
-			case STATE_COMMAND:
 				break;
 			}
-		}
 
-		switch (input_state) {
-		case STATE_PASSTHROUGH:
-			xwrite(masterfd, ibuf, nread);
-			break;
-
-		case STATE_COMMAND:
-			if (nread) {
+			case STATE_COMMAND: {
 				enum control_command cmd = CMD_NONE;
 
 				switch (*p) {
-				/* Passthrough a literal ^a */
+				/* Passthrough a literal ^a in stream order */
 				case 'a':
-				case  0x01:
-					cmd = CMD_CTRL_A;
+				case 0x01: {
+					static unsigned char c_a = 0x01;
+
+					xwrite(masterfd, &c_a, 1);
 					break;
+				}
 				case 'p':
 					cmd = CMD_PAUSE;
 					break;
@@ -105,7 +101,6 @@ inputproc(int masterfd, int controlfd, int chldfd)
 					cmd = CMD_MUTE;
 					break;
 				default:
-					input_state = STATE_PASSTHROUGH;
 					break;
 				}
 
@@ -118,14 +113,12 @@ inputproc(int masterfd, int controlfd, int chldfd)
 					xwrite(controlfd, &msg, sizeof msg);
 				}
 
-				if (nread > 1) {
-					xwrite(masterfd, p + 1, nread - 1);
-				}
-
+				p++;
+				nread--;
 				input_state = STATE_PASSTHROUGH;
+				break;
 			}
-			break;
+			}
 		}
-
 	}
 }

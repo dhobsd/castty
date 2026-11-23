@@ -77,18 +77,9 @@ next_delta_ms(int start_audio)
 static void
 handle_command(const struct control_msg *msg, int format_version)
 {
-	static unsigned char c_a = 0x01;
 	static unsigned char c_l = 0x0c;
 
 	switch (msg->cmd) {
-	case CMD_CTRL_A:
-		/* Can't just write this to STDOUT_FILENO; this has to be
-		 * written to the master end of the tty, otherwise it's 
-		 * ignored.
-		 */
-		xwrite(master, &c_a, 1);
-		break;
-
 	case CMD_MUTE:
 		if (audio_enabled) {
 			audio_toggle_mute();

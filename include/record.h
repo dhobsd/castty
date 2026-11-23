@@ -9,7 +9,6 @@
 
 enum control_command {
 	CMD_NONE,
-	CMD_CTRL_A,
 	CMD_MUTE,
 	CMD_PAUSE,
 	CMD_RESIZE,
