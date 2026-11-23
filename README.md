@@ -105,6 +105,8 @@ Currently supported commands are:
  * `m`: Mute or unmute the recording. Recording will continue, but without any
    audio until unmuted.
  * `k`: Drop a timeline chapter marker (`"m"` event) at the current timestamp.
+ * `K`: Prompt in the HUD for a chapter title and drop a named `"m"` marker
+   (`Enter` to save, `Esc` to cancel) without sending input to the shell.
  * `h`: Toggle the recording HUD (timer, timeline strip, markers, and live VU
    meter) on or off when running interactively (`-H auto`/`side`/`bottom`).
  * `p`: Pause or unpause the recording. Neither terminal nor audio will be
@@ -152,7 +154,10 @@ and bundled into `ui/css/min.css` and `ui/js/min.js` via `make -C ui` (using
  * [@xterm/xterm](https://github.com/xtermjs/xterm.js) (`6.0.0`)
 
 CasTTY's own styles and player code live unminified in `ui/css/player.css` and
-`ui/js/player.js`.
+`ui/js/player.js`. Asciicast v2 and v3 `"m"` marker events recorded via `^a k`
+or `^a K` render automatically in the web player as scrubber chapter ticks,
+hover previews, a chapters menu, and `[` / `]` previous/next chapter shortcuts
+(and are also compatible with the asciinema player).
 
 Licenses for all these utilities can be found in their respective repositories
 and in the LICENSE file in this repository.

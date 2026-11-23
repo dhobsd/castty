@@ -15,14 +15,18 @@ var getTimeout = (function() {
 	};
 })();
 
+var playerInstanceCounter = 0;
+
 var player = function(audioFile, containerElem, events, termInfoOrOpts, maybeOpts) {
 	var Player = {};
+	var instanceUid = ++playerInstanceCounter;
 	var ICON_PLAY = '<i class="material-icons" aria-hidden="true">&#xE037;</i>';
 	var ICON_PAUSE = '<i class="material-icons" aria-hidden="true">&#xE034;</i>';
 	var ICON_REPLAY = '<i class="material-icons" aria-hidden="true">&#xE042;</i>';
 	var ICON_LOADING = '<i class="material-icons" aria-hidden="true">&#xE88B;</i>';
 	var ICON_VOLUME = '<i class="material-icons" aria-hidden="true">&#xE050;</i>';
 	var ICON_MUTED = '<i class="material-icons" aria-hidden="true">&#xE04F;</i>';
+	var ICON_CHAPTERS = '<i class="material-icons" aria-hidden="true">&#xE241;</i>';
 	var ICON_THEME = '<i class="material-icons" aria-hidden="true">&#xE891;</i>';
 	var ICON_FULLSCREEN = '<i class="material-icons" aria-hidden="true">&#xE5D0;</i>';
 	var ICON_FULLSCREEN_EXIT = '<i class="material-icons" aria-hidden="true">&#xE5D1;</i>';
@@ -349,6 +353,31 @@ var player = function(audioFile, containerElem, events, termInfoOrOpts, maybeOpt
 
 		Player.themes = themes;
 		Player.markers = events.markers || [];
+		Player.chapters = [];
+		for (var mIdx = 0; mIdx < Player.markers.length; mIdx++) {
+			var rawM = Player.markers[mIdx];
+			if (!rawM || typeof rawM !== 'object') {
+				continue;
+			}
+			var mSec = Math.max(Number(rawM.time) || 0, 0);
+			var rawLbl = typeof rawM.label === 'string' ? rawM.label : '';
+			Player.chapters.push({
+				time: mSec,
+				timeMs: mSec * 1000,
+				label: rawLbl,
+				title: $.trim(rawLbl)
+			});
+		}
+		Player.chapters.sort(function(a, b) {
+			return a.timeMs - b.timeMs;
+		});
+		for (var cIdx = 0; cIdx < Player.chapters.length; cIdx++) {
+			Player.chapters[cIdx].index = cIdx;
+			if (!Player.chapters[cIdx].title) {
+				Player.chapters[cIdx].title = 'Chapter ' + (cIdx + 1);
+			}
+		}
+		Player.activeChapterIndex = -1;
 		Player.metadata = {
 			version: events.version || 1,
 			term: events.term || null,
@@ -549,6 +578,9 @@ var player = function(audioFile, containerElem, events, termInfoOrOpts, maybeOpt
 			if (Player.seeker && Player.seeker.data('plugin_rangeslider')) {
 				Player.seeker.rangeslider('update', false, false);
 			}
+			if (Player.syncMarkerLayout) {
+				Player.syncMarkerLayout();
+			}
 		};
 
 		$(window).on('resize orientationchange', function() {
@@ -586,17 +618,65 @@ var player = function(audioFile, containerElem, events, termInfoOrOpts, maybeOpt
 		Player.baseSeekPos = 0;
 		Player.duration = (events.duration || 0) * 1000;
 
+		var getTimelineMaxMs = function() {
+			return Math.max(Player.maxSeek || 0, Player.duration || 0);
+		};
+
+		Player.getActiveChapterIndex = function(curMs) {
+			var best = -1;
+			for (var i = 0; i < Player.chapters.length; i++) {
+				if (Player.chapters[i].timeMs <= curMs + 50) {
+					best = i;
+				} else {
+					break;
+				}
+			}
+			return best;
+		};
+
+		var syncActiveChapterUi = function(curMs) {
+			if (!Player.chapters.length) {
+				return;
+			}
+			var activeIdx = Player.getActiveChapterIndex(curMs);
+			if (activeIdx === Player.activeChapterIndex) {
+				return;
+			}
+			Player.activeChapterIndex = activeIdx;
+			if (Player.chaptersMenu) {
+				Player.chaptersMenu.find('button[role="menuitemradio"]').each(function() {
+					var btnIdx = parseInt($(this).attr('data-chapter'), 10);
+					$(this).attr('aria-checked', btnIdx === activeIdx ? 'true' : 'false');
+				});
+			}
+			if (Player.chaptersToggle) {
+				var activeLabel = activeIdx >= 0 ?
+				    'Chapters: ' + Player.chapters[activeIdx].title :
+				    'Chapters';
+				Player.chaptersToggle
+				    .attr('aria-label', activeLabel)
+				    .attr('title', activeLabel);
+			}
+		};
+
 		var updateTimeDisplay = function(curMs) {
 			if (!Player.timeElapsed) {
 				return;
 			}
-			var clamped = Math.min(Math.max(curMs || 0, 0), Player.duration || curMs || 0);
+			var totalMs = getTimelineMaxMs();
+			var clamped = Math.min(Math.max(curMs || 0, 0), totalMs || curMs || 0);
 			var curStr = formatTime(clamped);
-			var durStr = formatTime(Player.duration);
+			var durStr = formatTime(totalMs || Player.duration);
 			Player.timeElapsed.text(curStr);
 			Player.timeTotal.text(durStr);
+			syncActiveChapterUi(clamped);
 			if (Player.seeker) {
-				Player.seeker.attr('aria-valuetext', curStr + ' of ' + durStr);
+				var activeIdx = Player.activeChapterIndex;
+				var ariaVal = curStr + ' of ' + durStr;
+				if (activeIdx >= 0 && Player.chapters[activeIdx]) {
+					ariaVal += ', ' + Player.chapters[activeIdx].title;
+				}
+				Player.seeker.attr('aria-valuetext', ariaVal);
 			}
 		};
 
@@ -911,6 +991,9 @@ var player = function(audioFile, containerElem, events, termInfoOrOpts, maybeOpt
 		Player.seeking = 0;
 		Player.seekUnpause = 0;
 		var pointerScrubbing = false;
+		var scrubStartX = null;
+		var scrubLastX = null;
+		var scrubMovedPx = 0;
 
 		var commitSeek = function(val) {
 			val = Math.max(0, Math.min(val, Player.maxSeek || Player.duration || val));
@@ -948,8 +1031,27 @@ var player = function(audioFile, containerElem, events, termInfoOrOpts, maybeOpt
 			endEvent: ['touchend', 'touchcancel', 'mouseup']
 		};
 
-		$(Player.controls).on(rangeEvents.startEvent.join(' '), '.rangeslider', function() {
+		$(Player.controls).on(rangeEvents.startEvent.join(' '), '.rangeslider', function(e) {
+			var orig = e.originalEvent || e;
+			var cx = (orig.touches && orig.touches[0]) ? orig.touches[0].clientX : orig.clientX;
 			pointerScrubbing = true;
+			scrubStartX = typeof cx === 'number' ? cx : null;
+			scrubLastX = scrubStartX;
+			scrubMovedPx = 0;
+		});
+
+		$(document).on(rangeEvents.moveEvent.join(' '), function(e) {
+			if (!pointerScrubbing) {
+				return;
+			}
+			var orig = e.originalEvent || e;
+			var cx = (orig.touches && orig.touches[0]) ? orig.touches[0].clientX : orig.clientX;
+			if (typeof cx === 'number') {
+				if (scrubStartX !== null) {
+					scrubMovedPx = Math.max(scrubMovedPx, Math.abs(cx - scrubStartX));
+				}
+				scrubLastX = cx;
+			}
 		});
 
 		Player.seeker.rangeslider({
@@ -971,6 +1073,9 @@ var player = function(audioFile, containerElem, events, termInfoOrOpts, maybeOpt
 				}
 
 				updateTimeDisplay(val);
+				if (Player.updateScrubTooltipAtVal) {
+					Player.updateScrubTooltipAtVal(val, null);
+				}
 
 				if (Player.seeking == 0) {
 					Player.seeking = 1;
@@ -995,10 +1100,25 @@ var player = function(audioFile, containerElem, events, termInfoOrOpts, maybeOpt
 					Player.seeker.val(val).change();
 					Player.seekUpdate = 0;
 				}
+				if (scrubMovedPx <= 4 && scrubLastX !== null && Player.findSnappedChapter) {
+					var snappedCh = Player.findSnappedChapter(scrubLastX);
+					if (snappedCh) {
+						val = snappedCh.timeMs;
+						Player.seekUpdate = 1;
+						Player.seeker.val(val).change();
+						Player.seekUpdate = 0;
+					}
+				}
 
 				commitSeek(val);
 				Player.seeking = 0;
 				pointerScrubbing = false;
+				scrubStartX = null;
+				scrubLastX = null;
+				scrubMovedPx = 0;
+				if (Player.hideScrubTooltip) {
+					Player.hideScrubTooltip();
+				}
 				if (Player.seekUnpause) {
 					Player.seekUnpause = 0;
 					if (Player.paused) {
@@ -1030,6 +1150,396 @@ var player = function(audioFile, containerElem, events, termInfoOrOpts, maybeOpt
 		    .appendTo(Player.timeDisplay);
 		Player.timeTotal = $('<span class="castty-time-total"></span>')
 		    .appendTo(Player.timeDisplay);
+
+		var applySeekTarget = function(targetMs) {
+			var limitMs = getTimelineMaxMs();
+			var clamped = Math.max(0, limitMs > 0 ? Math.min(targetMs, limitMs) : targetMs);
+			Player.seekUpdate = 1;
+			Player.seeker.val(clamped).change();
+			Player.seekUpdate = 0;
+			commitSeek(clamped);
+		};
+
+		Player.seekToChapter = function(idx) {
+			if (idx < 0 || idx >= Player.chapters.length) {
+				return false;
+			}
+			applySeekTarget(Player.chapters[idx].timeMs);
+			return true;
+		};
+
+		Player.nextChapter = function() {
+			if (!Player.chapters.length) {
+				return false;
+			}
+			var curMs = audioFile && Player.audio ?
+			    Player.audio.currentTime * 1000 : Player.seekPos;
+			for (var i = 0; i < Player.chapters.length; i++) {
+				if (Player.chapters[i].timeMs > curMs + 50) {
+					return Player.seekToChapter(i);
+				}
+			}
+			return false;
+		};
+
+		Player.prevChapter = function() {
+			if (!Player.chapters.length) {
+				return false;
+			}
+			var curMs = audioFile && Player.audio ?
+			    Player.audio.currentTime * 1000 : Player.seekPos;
+			for (var i = Player.chapters.length - 1; i >= 0; i--) {
+				if (Player.chapters[i].timeMs < curMs - 250) {
+					return Player.seekToChapter(i);
+				}
+			}
+			if (curMs > Player.chapters[0].timeMs + 50) {
+				return Player.seekToChapter(0);
+			}
+			applySeekTarget(0);
+			return true;
+		};
+
+		var rangeTrack = Player.controls.find('.rangeslider--horizontal');
+		if (rangeTrack.length && Player.chapters.length) {
+			Player.markerLayer = $('<div class="castty-marker-layer" aria-hidden="true"></div>')
+			    .appendTo(rangeTrack);
+			Player.scrubTooltip = $('<div class="castty-scrub-tooltip" aria-hidden="true"></div>')
+			    .appendTo(rangeTrack);
+
+			for (var tIdx = 0; tIdx < Player.chapters.length; tIdx++) {
+				$('<span class="castty-marker-tick" data-chapter="' + tIdx + '"></span>')
+				    .appendTo(Player.markerLayer);
+			}
+
+			var positionMarkerTicks = function() {
+				var totalMs = getTimelineMaxMs();
+				Player.markerLayer.children('.castty-marker-tick').each(function() {
+					var idx = parseInt($(this).attr('data-chapter'), 10);
+					var ch = Player.chapters[idx];
+					var pct = (totalMs > 0 && ch) ?
+					    Math.max(0, Math.min((ch.timeMs / totalMs) * 100, 100)) : 0;
+					$(this).css('left', pct.toFixed(3) + '%');
+				});
+			};
+
+			Player.updateScrubTooltipAtVal = function(msVal, snappedChapter) {
+				var totalMs = getTimelineMaxMs();
+				var rect = rangeTrack[0].getBoundingClientRect();
+				if (rect.width <= 0 || totalMs <= 0) {
+					return;
+				}
+				var ch = snappedChapter;
+				if (!ch) {
+					var activeIdx = Player.getActiveChapterIndex(msVal);
+					ch = activeIdx >= 0 ? Player.chapters[activeIdx] : null;
+				}
+				var displayMs = snappedChapter ? snappedChapter.timeMs : msVal;
+				var text = formatTime(displayMs) + (ch ? ' \u00b7 ' + ch.title : '');
+				Player.scrubTooltip.text(text).addClass('is-visible');
+
+				var targetX = (Math.max(0, Math.min(displayMs, totalMs)) / totalMs) * rect.width;
+				var tipW = Player.scrubTooltip.outerWidth() || 0;
+				var halfW = tipW / 2;
+				var clampedX = rect.width > tipW ?
+				    Math.max(halfW, Math.min(targetX, rect.width - halfW)) :
+				    rect.width / 2;
+				Player.scrubTooltip.css('left', clampedX + 'px');
+			};
+
+			Player.hideScrubTooltip = function() {
+				Player.scrubTooltip.removeClass('is-visible');
+				Player.markerLayer.children('.castty-marker-tick').removeClass('is-hovered');
+			};
+
+			var findSnappedChapter = function(clientX) {
+				var rect = rangeTrack[0].getBoundingClientRect();
+				var totalMs = getTimelineMaxMs();
+				if (rect.width <= 0 || totalMs <= 0) {
+					return null;
+				}
+				var relX = clientX - rect.left;
+				var best = null;
+				var bestDist = 7;
+				for (var i = 0; i < Player.chapters.length; i++) {
+					var tickX = (Player.chapters[i].timeMs / totalMs) * rect.width;
+					var d = Math.abs(relX - tickX);
+					if (d <= bestDist) {
+						bestDist = d;
+						best = Player.chapters[i];
+					}
+				}
+				return best;
+			};
+			Player.findSnappedChapter = findSnappedChapter;
+
+			rangeTrack.on('pointermove mousemove', function(e) {
+				var orig = e.originalEvent || e;
+				if (typeof orig.clientX !== 'number') {
+					return;
+				}
+				var rect = rangeTrack[0].getBoundingClientRect();
+				var totalMs = getTimelineMaxMs();
+				if (rect.width <= 0 || totalMs <= 0) {
+					return;
+				}
+				var ratio = Math.max(0, Math.min((orig.clientX - rect.left) / rect.width, 1));
+				var snapped = pointerScrubbing ? null : findSnappedChapter(orig.clientX);
+				Player.markerLayer.children('.castty-marker-tick').each(function() {
+					var idx = parseInt($(this).attr('data-chapter'), 10);
+					$(this).toggleClass('is-hovered', !!(snapped && snapped.index === idx));
+				});
+				Player.updateScrubTooltipAtVal(ratio * totalMs, snapped);
+			});
+
+			rangeTrack.on('pointerleave mouseleave', function() {
+				if (!pointerScrubbing) {
+					Player.hideScrubTooltip();
+				}
+			});
+
+			positionMarkerTicks();
+			Player.syncMarkerLayout = function() {
+				positionMarkerTicks();
+				if (Player.positionChaptersPopover) {
+					Player.positionChaptersPopover();
+				}
+			};
+		}
+
+		if (Player.chapters.length) {
+			var chaptersBtnId = 'castty-chapters-btn-' + instanceUid;
+			var chaptersPopId = 'castty-chapters-pop-' + instanceUid;
+			var hasNativePopover = typeof HTMLElement !== 'undefined' &&
+			    'showPopover' in HTMLElement.prototype;
+			var hasCommandInvoker = typeof HTMLButtonElement !== 'undefined' &&
+			    'commandForElement' in HTMLButtonElement.prototype;
+			var hasAnchorPos = typeof CSS !== 'undefined' && CSS.supports &&
+			    CSS.supports('position-area: block-start');
+
+			Player.chaptersToggle = $('<button id="' + chaptersBtnId +
+			    '" class="castty-chapters-btn" type="button" aria-haspopup="menu" aria-expanded="false" aria-label="Chapters" title="Chapters">' +
+			    ICON_CHAPTERS + '</button>').appendTo(Player.controls);
+			Player.chaptersPopover = $('<div id="' + chaptersPopId +
+			    '" class="castty-chapters-popover"></div>').appendTo(Player.controls);
+			Player.chaptersMenu = $('<div class="castty-chapters-menu" focusgroup="menu nomemory" aria-labelledby="' +
+			    chaptersBtnId + '"></div>').appendTo(Player.chaptersPopover);
+			var chaptersGroup = $('<div role="group" aria-label="Chapters"></div>')
+			    .appendTo(Player.chaptersMenu);
+
+			if (hasNativePopover) {
+				Player.chaptersPopover[0].setAttribute('popover', 'auto');
+				if (hasCommandInvoker) {
+					Player.chaptersToggle[0].setAttribute('commandfor', chaptersPopId);
+					Player.chaptersToggle[0].setAttribute('command', 'toggle-popover');
+				} else {
+					Player.chaptersToggle[0].setAttribute('popovertarget', chaptersPopId);
+				}
+			}
+
+			for (var chIdx = 0; chIdx < Player.chapters.length; chIdx++) {
+				var chItem = Player.chapters[chIdx];
+				var itemBtn = $('<button type="button" role="menuitemradio" aria-checked="false" data-chapter="' +
+				    chIdx + '"></button>');
+				$('<span class="castty-chapter-title"></span>')
+				    .text(chItem.title)
+				    .appendTo(itemBtn);
+				$('<span class="castty-chapter-time hint" aria-hidden="true"></span>')
+				    .text(formatTime(chItem.timeMs))
+				    .appendTo(itemBtn);
+				itemBtn.appendTo(chaptersGroup);
+			}
+
+			if (typeof HTMLElement !== 'undefined' &&
+			    !('focusGroup' in HTMLElement.prototype)) {
+				Player.chaptersMenu[0].setAttribute('role', 'menu');
+				Player.chaptersMenu[0].addEventListener('keydown', function(ev) {
+					var keys = ['ArrowDown', 'ArrowUp', 'Home', 'End'];
+					if ($.inArray(ev.key, keys) === -1) {
+						return;
+					}
+					var items = Player.chaptersMenu.find('button[role="menuitemradio"]').toArray();
+					if (!items.length) {
+						return;
+					}
+					var cur = $.inArray(document.activeElement, items);
+					if (cur < 0) {
+						return;
+					}
+					var next = ev.key === 'Home' ? 0 :
+					    ev.key === 'End' ? items.length - 1 :
+					    (cur + (ev.key === 'ArrowUp' ? -1 : 1) + items.length) % items.length;
+					ev.preventDefault();
+					ev.stopImmediatePropagation();
+					items[next].focus({ preventScroll: true });
+				}, true);
+			}
+
+			var isChaptersOpen = function() {
+				var popEl = Player.chaptersPopover[0];
+				if (hasNativePopover) {
+					try {
+						return popEl.matches(':popover-open');
+					} catch (e) {}
+				}
+				return Player.chaptersPopover.hasClass('is-open');
+			};
+
+			Player.positionChaptersPopover = function() {
+				if (hasNativePopover && hasAnchorPos) {
+					return;
+				}
+				if (!isChaptersOpen()) {
+					return;
+				}
+				var btnRect = Player.chaptersToggle[0].getBoundingClientRect();
+				var popEl = Player.chaptersPopover[0];
+				var popW = popEl.offsetWidth || 240;
+				var popH = popEl.offsetHeight || 160;
+				var vw = window.innerWidth || document.documentElement.clientWidth || 800;
+				var vh = window.innerHeight || document.documentElement.clientHeight || 600;
+				var left = Math.min(Math.max(8, btnRect.right - popW), Math.max(8, vw - popW - 8));
+				var top = btnRect.top - popH - 6;
+				if (top < 8 && btnRect.bottom + popH + 6 <= vh - 8) {
+					top = btnRect.bottom + 6;
+				} else {
+					top = Math.max(8, top);
+				}
+				Player.chaptersPopover.css({
+					left: left + 'px',
+					top: top + 'px'
+				});
+			};
+
+			var enterMenuOnOpen = false;
+			var pointerOnTrigger = false;
+
+			var focusInitialChapterItem = function() {
+				var items = Player.chaptersMenu.find('button[role="menuitemradio"]');
+				if (!items.length) {
+					return;
+				}
+				var idx = Player.activeChapterIndex >= 0 ? Player.activeChapterIndex : 0;
+				var el = items.get(idx) || items.get(0);
+				if (el) {
+					el.focus({ preventScroll: true });
+				}
+			};
+
+			var closeChaptersMenu = function(restoreFocus) {
+				var popEl = Player.chaptersPopover[0];
+				if (hasNativePopover) {
+					if (isChaptersOpen()) {
+						popEl.hidePopover();
+					}
+				} else if (Player.chaptersPopover.hasClass('is-open')) {
+					Player.chaptersPopover.removeClass('is-open');
+					Player.chaptersToggle.attr('aria-expanded', 'false');
+				}
+				if (restoreFocus) {
+					Player.chaptersToggle[0].focus({ preventScroll: true });
+				}
+			};
+
+			var openChaptersMenu = function(enterFocus) {
+				var popEl = Player.chaptersPopover[0];
+				enterMenuOnOpen = !!enterFocus;
+				if (hasNativePopover) {
+					if (!isChaptersOpen()) {
+						popEl.showPopover();
+					} else if (enterFocus) {
+						focusInitialChapterItem();
+					}
+				} else {
+					Player.chaptersPopover.addClass('is-open');
+					Player.chaptersToggle.attr('aria-expanded', 'true');
+					Player.positionChaptersPopover();
+					if (enterFocus) {
+						focusInitialChapterItem();
+					}
+				}
+			};
+
+			Player.chaptersToggle.on('pointerdown mousedown', function() {
+				pointerOnTrigger = true;
+			});
+
+			Player.chaptersToggle.on('click', function() {
+				if (!hasNativePopover) {
+					if (isChaptersOpen()) {
+						closeChaptersMenu(false);
+					} else {
+						openChaptersMenu(!pointerOnTrigger);
+					}
+				} else if (!pointerOnTrigger) {
+					enterMenuOnOpen = true;
+				}
+				pointerOnTrigger = false;
+			});
+
+			Player.chaptersToggle.on('keydown', function(e) {
+				if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+					e.preventDefault();
+					openChaptersMenu(true);
+				}
+			});
+
+			if (hasNativePopover) {
+				Player.chaptersPopover[0].addEventListener('toggle', function(ev) {
+					var openNow = ev.newState === 'open';
+					Player.chaptersToggle.attr('aria-expanded', openNow ? 'true' : 'false');
+					if (openNow) {
+						Player.positionChaptersPopover();
+						if (enterMenuOnOpen) {
+							enterMenuOnOpen = false;
+							focusInitialChapterItem();
+						}
+					} else {
+						enterMenuOnOpen = false;
+					}
+				});
+			}
+
+			var pointerItemActivate = false;
+			Player.chaptersMenu.on('pointerdown mousedown', 'button[role="menuitemradio"]', function() {
+				pointerItemActivate = true;
+			});
+			Player.chaptersMenu.on('pointermove', 'button[role="menuitemradio"]', function() {
+				this.focus({ preventScroll: true });
+			});
+			Player.chaptersMenu.on('click', 'button[role="menuitemradio"]', function() {
+				var idx = parseInt($(this).attr('data-chapter'), 10);
+				var fromPointer = pointerItemActivate;
+				pointerItemActivate = false;
+				Player.seekToChapter(idx);
+				closeChaptersMenu(!fromPointer);
+			});
+
+			Player.chaptersPopover.on('keydown', function(e) {
+				if (e.key === 'Escape') {
+					e.preventDefault();
+					e.stopPropagation();
+					closeChaptersMenu(true);
+				} else if (e.key === 'Tab') {
+					closeChaptersMenu(false);
+				}
+			});
+
+			$(document).on('focusin pointerdown', function(e) {
+				if (!isChaptersOpen()) {
+					return;
+				}
+				var t = e.target;
+				if (t === Player.chaptersToggle[0] ||
+				    $.contains(Player.chaptersToggle[0], t) ||
+				    t === Player.chaptersPopover[0] ||
+				    $.contains(Player.chaptersPopover[0], t)) {
+					return;
+				}
+				closeChaptersMenu(false);
+			});
+		}
+
 		updateTimeDisplay(0);
 
 		if (audioFile) {
@@ -1176,6 +1686,12 @@ var player = function(audioFile, containerElem, events, termInfoOrOpts, maybeOpt
 				Player.seeker.val(nextFwd).change();
 				Player.seekUpdate = 0;
 				commitSeek(nextFwd);
+			} else if (e.key === ']' && tag !== 'input' && Player.chapters.length) {
+				e.preventDefault();
+				Player.nextChapter();
+			} else if (e.key === '[' && tag !== 'input' && Player.chapters.length) {
+				e.preventDefault();
+				Player.prevChapter();
 			} else if ((e.key === 'm' || e.key === 'M') && Player.muteToggle) {
 				e.preventDefault();
 				Player.muteToggle.trigger('click');
@@ -1194,6 +1710,9 @@ var player = function(audioFile, containerElem, events, termInfoOrOpts, maybeOpt
 				if (isFinite(Player.audio.duration) && Player.audio.duration > 0) {
 					Player.maxSeek = Player.audio.duration * 1000;
 					updateTimeDisplay(Player.audio.currentTime * 1000);
+					if (Player.syncMarkerLayout) {
+						Player.syncMarkerLayout();
+					}
 				}
 				if (Player.pendingSeek !== null && Player.audio.readyState > 0) {
 					try {
