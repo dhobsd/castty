@@ -5,9 +5,9 @@ JQUERY_VER = 3.7.1
 JQUERY_URL = https://registry.npmjs.org/jquery/-/jquery-$(JQUERY_VER).tgz
 JQUERY_SHA256 = 68a9f787516da47c680e09c187bcbac4536b6f85d90eb882844e12919e583f53
 
-RANGESLIDER_VER = 2.3.0
+RANGESLIDER_VER = 2.3.3
 RANGESLIDER_URL = https://registry.npmjs.org/rangeslider.js/-/rangeslider.js-$(RANGESLIDER_VER).tgz
-RANGESLIDER_SHA256 = 43cfb5275ec48f9bade010c3e958d41959003f1bd241096b2efc3c7a5a9681ab
+RANGESLIDER_SHA256 = 192059b07da769214ee486e84d8e7d28d076f95fdd9470df125d0441d94ab800
 
 XTERM_VER = 2.4.0
 XTERM_URL = https://registry.npmjs.org/xterm/-/xterm-$(XTERM_VER).tgz
