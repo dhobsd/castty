@@ -12,6 +12,7 @@ struct cast_append_info {
 	double v1_events_ms;
 	int v1_empty;
 	int need_newline;
+	int existing_markers;
 	long long v1_truncate_off;
 	char *v1_rewrite_buf;
 	size_t v1_rewrite_len;

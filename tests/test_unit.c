@@ -1,4 +1,5 @@
 #include <assert.h>
+#include <fcntl.h>
 #include <math.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -18,6 +19,8 @@
 #include "audio/writer-sndfile.h"
 #include "cast.h"
 #include "json.h"
+#include "tui/hud.h"
+#include "tui/screen.h"
 
 static void
 put_u16le(unsigned char *p, uint16_t v)
@@ -645,6 +648,144 @@ test_writer_m4a(void)
 	}
 }
 
+static void
+read_pipe_avail(int rfd, char *buf, size_t sz, size_t *out_len)
+{
+	size_t total = 0;
+
+	for (;;) {
+		ssize_t n = read(rfd, buf + total, sz - 1 - total);
+
+		if (n <= 0) {
+			break;
+		}
+		total += (size_t)n;
+		if (total >= sz - 1) {
+			break;
+		}
+	}
+	buf[total] = '\0';
+	*out_len = total;
+}
+
+static void
+test_hud_layout_and_compositor(void)
+{
+	enum hud_mode mode = HUD_AUTO;
+	struct hud_layout lay;
+	struct hud_state st;
+	struct tui_vterm *tv;
+	struct tui_surface *sf;
+	struct audio_vu vu;
+	int pfd[2];
+	char out[16384];
+	size_t nread = 0;
+
+	assert(hud_parse_mode("auto", &mode) == 0 && mode == HUD_AUTO);
+	assert(hud_parse_mode("SIDE", &mode) == 0 && mode == HUD_SIDE);
+	assert(hud_parse_mode("bottom", &mode) == 0 && mode == HUD_BOTTOM);
+	assert(hud_parse_mode("off", &mode) == 0 && mode == HUD_OFF);
+	assert(hud_parse_mode("none", &mode) == 0 && mode == HUD_OFF);
+	assert(hud_parse_mode("nope", &mode) == -1);
+
+	/* Auto at 40x120 reserves 8 side columns cleanly */
+	hud_compute_layout(HUD_AUTO, 40, 120, 0, 0, 0, &lay);
+	assert(lay.active_mode == HUD_SIDE);
+	assert(lay.child_rows == 40 && lay.child_cols == 112);
+	assert(lay.hud_col == 112 && lay.hud_cols == HUD_SIDE_COLS);
+
+	/* Explicit -c 90 on 120 cols keeps 90 intact alongside side HUD */
+	hud_compute_layout(HUD_AUTO, 40, 120, 0, 90, 0, &lay);
+	assert(lay.active_mode == HUD_SIDE);
+	assert(lay.child_cols == 90);
+	assert(lay.hud_col == 112);
+
+	/* Narrow 24x80 falls back to 1-row bottom bar in auto */
+	hud_compute_layout(HUD_AUTO, 24, 80, 0, 0, 0, &lay);
+	assert(lay.active_mode == HUD_BOTTOM);
+	assert(lay.child_rows == 23 && lay.child_cols == 80);
+	assert(lay.hud_row == 23 && lay.hud_cols == 80);
+
+	/* Forced side on 24x80 takes 8 columns */
+	hud_compute_layout(HUD_SIDE, 24, 80, 0, 0, 0, &lay);
+	assert(lay.active_mode == HUD_SIDE);
+	assert(lay.child_rows == 24 && lay.child_cols == 72);
+
+	/* Hidden / off gives full outer dimensions */
+	hud_compute_layout(HUD_SIDE, 24, 80, 0, 0, 1, &lay);
+	assert(lay.active_mode == HUD_OFF);
+	assert(lay.child_rows == 24 && lay.child_cols == 80);
+
+	/* Compositor render + diff + zero-diff idle frame verification */
+	assert(pipe(pfd) == 0);
+	assert(fcntl(pfd[0], F_SETFL, O_NONBLOCK) == 0);
+
+	hud_compute_layout(HUD_SIDE, 14, 40, 0, 0, 0, &lay);
+	tv = tui_vterm_create(lay.child_rows, lay.child_cols, NULL, NULL);
+	sf = tui_surface_create(lay.outer_rows, lay.outer_cols, pfd[1]);
+	hud_init(&st, 0, 0, 1, "m4a", 0, 0.0);
+
+	tui_vterm_feed(tv, "hello\x1b[32m world\x1b[0m", 21, -1);
+	hud_note_output(&st);
+	hud_note_marker(&st, 1500.0);
+
+	memset(&vu, 0, sizeof vu);
+	vu.active = 1;
+	vu.stereo = 1;
+	vu.rms_l = 0.25f;
+	vu.rms_r = 0.25f;
+	vu.peak_l = 0.25f;
+	vu.peak_r = 0.25f;
+	hud_tick(&st, 1500.0, &vu);
+
+	tui_surface_begin(sf);
+	tui_vterm_blit(tv, sf, 0, 0);
+	hud_render(&st, &lay, sf);
+	tui_surface_flush(sf, 0, 11, 1, 0);
+
+	read_pipe_avail(pfd[0], out, sizeof out, &nread);
+	assert(nread > 0);
+	assert(strstr(out, "hello") != NULL);
+	assert(strstr(out, "REC") != NULL);
+	assert(strstr(out, "M4A") != NULL);
+	assert(strstr(out, "00:01") != NULL);
+	assert(strstr(out, "dB") != NULL);
+
+	/* Identical second frame must emit 0 diff bytes */
+	tui_surface_begin(sf);
+	tui_vterm_blit(tv, sf, 0, 0);
+	hud_render(&st, &lay, sf);
+	tui_surface_flush(sf, 0, 11, 1, 0);
+	read_pipe_avail(pfd[0], out, sizeof out, &nread);
+	assert(nread == 0);
+
+	/* Clipping + mute state renders CLIP/MUTE badges */
+	vu.clipped = 1;
+	vu.peak_l = 0.995f;
+	hud_tick(&st, 2000.0, &vu);
+	tui_surface_begin(sf);
+	tui_vterm_blit(tv, sf, 0, 0);
+	hud_render(&st, &lay, sf);
+	tui_surface_flush(sf, 0, 11, 1, 0);
+	read_pipe_avail(pfd[0], out, sizeof out, &nread);
+	assert(strstr(out, "CLIP") != NULL);
+
+	vu.clipped = 0;
+	vu.muted = 1;
+	hud_tick(&st, 2500.0, &vu);
+	tui_surface_begin(sf);
+	tui_vterm_blit(tv, sf, 0, 0);
+	hud_render(&st, &lay, sf);
+	tui_surface_flush(sf, 0, 11, 1, 0);
+	read_pipe_avail(pfd[0], out, sizeof out, &nread);
+	assert(strstr(out, "MUTE") != NULL);
+
+	tui_vterm_destroy(tv);
+	tui_surface_destroy(sf);
+	close(pfd[0]);
+	close(pfd[1]);
+}
+
 int
 main(int argc, char **argv)
 {
@@ -660,6 +801,7 @@ main(int argc, char **argv)
 	test_writer_lame();
 	test_writer_sndfile();
 	test_writer_m4a();
+	test_hud_layout_and_compositor();
 
 	printf("C unit tests passed\n");
 	return 0;

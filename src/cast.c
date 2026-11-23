@@ -326,9 +326,10 @@ parse_v1_stdout(const char *p, const char *end, const char **rbracket_out,
 
 static int
 parse_ndjson_events(const char *p, const char *end, int version,
-    int *cols, int *rows, double *total_sec)
+    int *cols, int *rows, int *markers_out, double *total_sec)
 {
 	double acc = 0.0;
+	int markers = 0;
 
 	while (p < end) {
 		double t = 0.0;
@@ -364,6 +365,9 @@ parse_ndjson_events(const char *p, const char *end, int version,
 			return -1;
 		}
 		p = skip_ws(p + 1, end);
+		if (strcmp(code, "m") == 0) {
+			markers++;
+		}
 		if (strcmp(code, "r") == 0 && p < end && *p == '"') {
 			int rc = 0, rr = 0;
 
@@ -406,6 +410,9 @@ parse_ndjson_events(const char *p, const char *end, int version,
 		}
 	}
 
+	if (markers_out != NULL) {
+		*markers_out = markers;
+	}
 	*total_sec = acc;
 	return 0;
 }
@@ -695,7 +702,7 @@ cast_inspect(const char *path, int req_version, struct cast_append_info *info,
 		}
 	} else {
 		if (parse_ndjson_events(obj_end, end, version, &info->cols,
-		    &info->rows, &nd_total_sec) != 0) {
+		    &info->rows, &info->existing_markers, &nd_total_sec) != 0) {
 			snprintf(errbuf, errsz,
 			    "castty: %s contains invalid asciicast v%d events",
 			    path, version);

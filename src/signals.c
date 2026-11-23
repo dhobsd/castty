@@ -99,7 +99,7 @@ handle_sigchld(int sig)
 static void
 handle_sigwinch(int sig)
 {
-	unsigned short minrow, mincol;
+	int saved_errno = errno;
 
 	(void)sig;
 
@@ -107,32 +107,12 @@ handle_sigwinch(int sig)
 	 * size. In any case, restore to the current window size.
 	 */
 	if (ioctl(STDIN_FILENO, TIOCGWINSZ, &rwin) == -1) {
-		perror("ioctl(TIOCGWINSZ)");
-		exit(EXIT_FAILURE);
+		errno = saved_errno;
+		return;
 	}
 
-	minrow = MIN(rwin.ws_row, owin.ws_row);
-	mincol = MIN(rwin.ws_col, owin.ws_col);
-
-	if (win.ws_row != minrow || win.ws_col != mincol) {
-		win.ws_row = minrow;
-		win.ws_col = mincol;
-
-		if (ioctl(masterfd, TIOCSWINSZ, &win) == -1) {
-			perror("ioctl(TIOCSWINSZ)");
-			exit(EXIT_FAILURE);
-		}
-
-		if (ctrl_write_fd != -1) {
-			struct control_msg msg = {
-				.cmd = CMD_RESIZE,
-				.rows = minrow,
-				.cols = mincol,
-			};
-			ssize_t wr = write(ctrl_write_fd, &msg, sizeof msg);
-			(void)wr;
-		}
-	}
+	record_sync_winsize(ctrl_write_fd, 0, CMD_RESIZE);
+	errno = saved_errno;
 }
 
 void

@@ -8,23 +8,37 @@
 #include <time.h>
 
 #include "cast.h"
+#include "tui/hud.h"
 
 enum control_command {
 	CMD_NONE,
 	CMD_MUTE,
 	CMD_PAUSE,
 	CMD_RESIZE,
+	CMD_MARKER,
+	CMD_HUD_TOGGLE,
 };
 
 struct control_msg {
 	enum control_command cmd;
 	unsigned short rows;
 	unsigned short cols;
+	unsigned short outer_rows;
+	unsigned short outer_cols;
+	enum hud_mode hud_mode;
 };
 
 extern volatile sig_atomic_t ctrl_write_fd;
 extern volatile sig_atomic_t sigchld_write_fd;
 extern volatile sig_atomic_t tty_saved;
+extern enum hud_mode rec_hud_mode;
+extern int rec_req_rows, rec_req_cols;
+extern volatile sig_atomic_t hud_user_hidden;
+
+void record_sync_winsize(int ctrl_fd, int always_send,
+    enum control_command cmd);
+void record_init_winsize_cache(int outer_rows, int outer_cols,
+    enum hud_mode mode);
 
 struct outargs {
 	int start_paused;
@@ -33,6 +47,10 @@ struct outargs {
 	int masterfd;
 	int rows;
 	int cols;
+	int outer_rows;
+	int outer_cols;
+	int hud_enabled;
+	enum hud_mode hud_mode;
 	int format_version;
 	int use_raw;
 	pid_t shellpid;

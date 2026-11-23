@@ -316,17 +316,17 @@ class TestRecordingAndFormats(unittest.TestCase):
             # -A on missing file creates a fresh v3 recording cleanly.
             v3 = os.path.join(d, "app_v3.cast")
             rc, _, _, err = run_in_pty(
-                ["record", "-N", "-A", "-e", "sh -c 'printf seg1'", v3],
+                ["record", "-N", "-H", "off", "-A", "-e", "sh -c 'printf seg1'", v3],
                 rows=24, cols=80,
             )
             self.assertEqual(rc, 0, msg=err)
             rc, _, _, err = run_in_pty(
-                ["record", "-N", "-A", "-e", "sh -c 'printf seg2'", v3],
+                ["record", "-N", "-H", "off", "-A", "-e", "sh -c 'printf seg2'", v3],
                 rows=30, cols=100,
             )
             self.assertEqual(rc, 0, msg=err)
             rc, _, _, err = run_in_pty(
-                ["record", "-N", "-A", "-e", "sh -c 'printf seg3'", v3],
+                ["record", "-N", "-H", "off", "-A", "-e", "sh -c 'printf seg3'", v3],
                 rows=35, cols=120,
             )
             self.assertEqual(rc, 0, msg=err)
@@ -367,12 +367,12 @@ class TestRecordingAndFormats(unittest.TestCase):
             # v2 append preserves monotonic timestamps and emits resize.
             v2 = os.path.join(d, "app_v2.cast")
             rc, _, _, err = run_in_pty(
-                ["record", "-N", "-2", "-e", "sh -c 'printf v2a; sleep 0.08'", v2],
+                ["record", "-N", "-H", "off", "-2", "-e", "sh -c 'printf v2a; sleep 0.08'", v2],
                 rows=24, cols=80,
             )
             self.assertEqual(rc, 0, msg=err)
             rc, _, _, err = run_in_pty(
-                ["record", "-N", "-A", "-e", "sh -c 'printf v2b'", v2],
+                ["record", "-N", "-H", "off", "-A", "-e", "sh -c 'printf v2b'", v2],
                 rows=32, cols=110,
             )
             self.assertEqual(rc, 0, msg=err)
@@ -389,12 +389,12 @@ class TestRecordingAndFormats(unittest.TestCase):
             # v1 append (both castty-generated and external duration-first v1).
             v1 = os.path.join(d, "app_v1.cast")
             rc, _, _, err = run_in_pty(
-                ["record", "-N", "-1", "-e", "sh -c 'printf v1a; sleep 0.1'", v1],
+                ["record", "-N", "-H", "off", "-1", "-e", "sh -c 'printf v1a; sleep 0.1'", v1],
                 rows=24, cols=80,
             )
             self.assertEqual(rc, 0, msg=err)
             rc, _, _, err = run_in_pty(
-                ["record", "-N", "-A", "-e", "sh -c 'printf v1b'", v1],
+                ["record", "-N", "-H", "off", "-A", "-e", "sh -c 'printf v1b'", v1],
                 rows=24, cols=80,
             )
             self.assertEqual(rc, 0, msg=err)
@@ -410,7 +410,7 @@ class TestRecordingAndFormats(unittest.TestCase):
             with open(v1_ext, "w", encoding="utf-8") as f:
                 f.write('{"duration": 0.4, "version": 1, "width": 80, "height": 24, "stdout": [[0.1, "ext1"]]}\n')
             rc, _, _, err = run_in_pty(
-                ["record", "-N", "-A", "-e", "sh -c 'printf ext2'", v1_ext],
+                ["record", "-N", "-H", "off", "-A", "-e", "sh -c 'printf ext2'", v1_ext],
                 rows=24, cols=80,
             )
             self.assertEqual(rc, 0, msg=err)
@@ -420,6 +420,59 @@ class TestRecordingAndFormats(unittest.TestCase):
             self.assertIn("ext1", outs1e)
             self.assertIn("ext2", outs1e)
             self.assertGreaterEqual(d1e["duration"], 0.4)
+
+    def test_recording_hud_timeline_markers_and_toggle(self):
+        with tempfile.TemporaryDirectory(prefix="castty_hud_") as d:
+            bad_cast = os.path.join(d, "bad_hud.cast")
+            rc, _, _, err = run_in_pty(["record", "-N", "-H", "bogus", bad_cast])
+            self.assertNotEqual(rc, 0)
+            self.assertIn("unsupported HUD mode", err)
+
+            # Auto mode on 24x120 picks 8-col side HUD (child 112x24), keeps .cast pure,
+            # records ^a k marker events, and resizes cleanly on ^a h toggle.
+            cast_side = os.path.join(d, "hud_side.cast")
+            rc, _, out, err = run_in_pty(
+                ["record", "-N", "-e", "cat", cast_side],
+                rows=24, cols=120, wait_for=b"\x1b[H",
+                send_seq=[
+                    (0.08, b"hello_hud\n"),
+                    (0.18, b"\x01k"),
+                    (0.28, b"\x01h"),
+                    (0.38, b"\x01h"),
+                    (0.48, b"\x04"),
+                ],
+            )
+            self.assertEqual(rc, 0, msg=err)
+            out_s = out.decode("utf-8", "replace")
+            self.assertIn("REC", out_s)
+            self.assertIn("MK:00", out_s)
+            self.assertIn("M:01", out_s)
+            self.assertIn("hello_hud", out_s)
+
+            with open(cast_side, "r", encoding="utf-8") as f:
+                lines = [json.loads(line) for line in f]
+            self.assertEqual(lines[0]["term"]["cols"], 112)
+            self.assertEqual(lines[0]["term"]["rows"], 24)
+            outs = "".join(ev[2] for ev in lines[1:] if ev[1] == "o")
+            markers = [ev for ev in lines[1:] if ev[1] == "m"]
+            resizes = [ev[2] for ev in lines[1:] if ev[1] == "r"]
+            self.assertIn("hello_hud", outs)
+            self.assertNotIn("REC", outs)
+            self.assertEqual(len(markers), 1)
+            self.assertEqual(resizes, ["120x24", "112x24"])
+
+            # Bottom HUD on 24x80 reserves 1 row (80x23).
+            cast_bot = os.path.join(d, "hud_bot.cast")
+            rc, _, out_b, err = run_in_pty(
+                ["record", "-N", "-H", "bottom", "-e", "sh -c 'echo bot; sleep 0.2'", cast_bot],
+                rows=24, cols=80,
+            )
+            self.assertEqual(rc, 0, msg=err)
+            self.assertIn(b"REC", out_b)
+            with open(cast_bot, "r", encoding="utf-8") as f:
+                blines = [json.loads(line) for line in f]
+            self.assertEqual(blines[0]["term"]["cols"], 80)
+            self.assertEqual(blines[0]["term"]["rows"], 23)
 
 
 @unittest.skipUnless(HAS_FFMPEG, "requires ffmpeg/ffprobe")
@@ -864,6 +917,47 @@ class TestAudioLoopback(unittest.TestCase):
 
             max_jump = self._max_step_around(["-i", out_audio], dur1)
             self.assertLess(max_jump, 0.08, msg=f"Pop/step jump in {ext}: {max_jump}")
+
+    def test_recording_hud_live_vu_loopback(self):
+        out_wav = os.path.join(self.tmpdir.name, "hud_vu.wav")
+        cast_path = os.path.join(self.tmpdir.name, "hud_vu.cast")
+        play = subprocess.Popen(["paplay", "-d", "castty_t_lsink_st", self.tone_wav])
+        try:
+            time.sleep(0.2)
+            rc, _, out, err = run_in_pty(
+                [
+                    "record", "-N", "-H", "side", "-d", self.st_dev,
+                    "-a", out_wav, "-e", "cat", cast_path,
+                ],
+                rows=24, cols=100, wait_for=b"\x1b[H",
+                send_seq=[
+                    (0.15, b"vu_start\n"),
+                    (0.75, b"\x01k"),
+                    (1.05, b"\x01m"),
+                    (1.35, b"\x04"),
+                ],
+            )
+        finally:
+            play.wait()
+
+        self.assertEqual(rc, 0, msg=err)
+        self.assertEqual(err, "")
+        out_s = out.decode("utf-8", "replace")
+        self.assertIn("WAV", out_s)
+        self.assertIn("MUTE", out_s)
+        self.assertIn("M:01", out_s)
+        self.assertRegex(out_s, r"-\d{1,2}dB")
+        self.assertTrue(any(ch in out_s for ch in "\u2581\u2582\u2583\u2584\u2585\u2586\u2587\u2588"),
+                        msg="Expected VU bar block glyphs in HUD output")
+
+        info = ffprobe_stream(out_wav)
+        self.assertEqual(info.get("codec_name"), "pcm_s16le")
+        with open(cast_path, "r", encoding="utf-8") as f:
+            lines = [json.loads(line) for line in f]
+        self.assertEqual(lines[0]["term"]["cols"], 92)
+        self.assertEqual(len([ev for ev in lines[1:] if ev[1] == "m"]), 1)
+        cast_dur = sum(max(ev[0], 0.0) for ev in lines[1:])
+        self.assertAlmostEqual(cast_dur, float(info["duration"]), delta=0.25)
 
 
 if __name__ == "__main__":
