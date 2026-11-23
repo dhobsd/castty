@@ -40,7 +40,7 @@ installed to a location other than `/usr/local/`, you will have to edit the
 
 ## Usage
 
-    usage: castty record [-123acDdehlmprt] [out.cast]
+    usage: castty record [-123acDdehlNmprt] [out.cast]
      -1             Output asciicast v1 format.
      -2             Output asciicast v2 format.
      -3             Output asciicast v3 format (default).
@@ -51,6 +51,7 @@ installed to a location other than `/usr/local/`, you will have to edit the
      -e <cmd>       Execute <cmd> from the recorded shell session.
      -l             List available audio input devices and exit.
      -m             Encode audio to mp3 before writing.
+     -N             Disable terminal color/version probing.
      -p             Begin the recording in paused mode.
      -r <rows>      Use <rows> rows in the recorded shell session.
      -R             Use a raw sound device.
@@ -104,6 +105,12 @@ recorded window size can only ever be as large or smaller than the original
 window size.
 
 CasTTY supports UTF-8 input.
+
+When recording v2 or v3 casts on a TTY, CasTTY queries the outer terminal
+over the TTY (`XTVERSION`, `OSC 10`/`11`/`4`) to record its version and color
+palette in the header (disable with `-N`). The web player applies recorded
+colors automatically, falls back to built-in palettes by `$TERM`/`COLORFGBG`,
+and honors `prefers-contrast: more` alongside its theme switcher.
 
 CasTTY outputs in
 [asciicast v3](https://docs.asciinema.org/manual/asciicast/v3/)

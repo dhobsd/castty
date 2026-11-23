@@ -37,6 +37,8 @@ struct outargs {
 	const char *cmd;
 	const char *env;
 	const char *term_type;
+	const char *term_version;
+	const char *theme_json;
 	const char *title;
 	const char *outfn;
 	const char *devid;
