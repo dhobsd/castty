@@ -25,8 +25,10 @@ broken version of `libsoundio` that depends on a version of JACK that doesn't
 work. This is fixed in the [libsoundio repo](https://github.com/andrewrk/libsoundio),
 but you will have to build it yourself.
 
-CasTTY also depends on [LAME](http://lame.sourceforge.net/) (and in particular,
-libmp3lame) for on-the-fly MP3 encoding and decoding.
+CasTTY also depends on [LAME](http://lame.sourceforge.net/) (`libmp3lame`) for
+on-the-fly MP3 encoding and decoding, and
+[libsndfile](https://libsndfile.github.io/libsndfile/) for WAV, FLAC, Ogg Opus,
+and Ogg Vorbis audio support.
 
 There are no UI build dependencies because I find that idea a little silly.
 
@@ -38,7 +40,7 @@ installed to a location other than `/usr/local/`, you will have to edit the
 
 ## Usage
 
-    usage: castty record [-123AacDdehlmNprt] [out.cast]
+    usage: castty record [-123AacDdFehlmNprtR] [out.cast]
      -1             Output asciicast v1 format.
      -2             Output asciicast v2 format.
      -3             Output asciicast v3 format (default).
@@ -48,8 +50,10 @@ installed to a location other than `/usr/local/`, you will have to edit the
      -D <outfile>   Send debugging information into <outfile>.
      -d <device>    Use audio device <device> for input.
      -e <cmd>       Execute <cmd> from the recorded shell session.
+     -F <format>    Audio output format: raw, mp3, wav, flac, opus, ogg.
+     -h             Show this help.
      -l             List available audio input devices and exit.
-     -m             Encode audio to mp3 before writing.
+     -m             Encode audio to mp3 before writing (shorthand for -F mp3).
      -N             Disable terminal color/version probing.
      -p             Begin the recording in paused mode.
      -r <rows>      Use <rows> rows in the recorded shell session.
@@ -70,9 +74,12 @@ The `-d 'AppleHDAEngineInput:1B,0,1,0:1'` argument can be pasted directly to
 CasTTY to choose that device for recording. The audio format and sample rate
 CasTTY will use is also provided.
 
-CasTTY supports MP3 output by default, but other encodings may be desirable.
-Without the `-m` flag, CasTTY outputs interleaved PCM audio. (CasTTY upgrades
-mono audio to stereo.)
+CasTTY encodes audio directly to MP3 (`-m` / `-F mp3` / `.mp3`), WAV (`-F wav`
+/ `.wav`), FLAC (`-F flac` / `.flac`), Ogg Opus (`-F opus` / `.opus`), or Ogg
+Vorbis (`-F ogg` / `.ogg`), inferred from the `-a` filename extension unless
+overridden by `-F` or `-m`. Otherwise, CasTTY outputs raw interleaved PCM audio
+(duplicating mono inputs to stereo for raw PCM; writing 1-channel mono for
+encoded formats on mono devices unless appending to an existing stereo file).
 
 Utilities like [sox](http://sox.sourceforge.net/) may be used to convert the
 audio into more useful formats for web publication.

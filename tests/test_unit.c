@@ -6,6 +6,7 @@
 #include <string.h>
 #include <unistd.h>
 
+#include <sndfile.h>
 #include <soundio/soundio.h>
 
 #include "audio.h"
@@ -13,6 +14,7 @@
 #include "audio/writer.h"
 #include "audio/writer-lame.h"
 #include "audio/writer-raw.h"
+#include "audio/writer-sndfile.h"
 #include "cast.h"
 #include "json.h"
 
@@ -371,22 +373,21 @@ encode_tone_sample(enum SoundIoFormat fmt, unsigned char *p, double s)
 }
 
 static void
-write_lame_tone(FILE *fp, enum SoundIoFormat fmt, int sb, int nchannels, int mono,
-    int buf_time_s, int frames)
+write_writer_tone(struct audio_writer *aw, enum SoundIoFormat fmt, int sb,
+    int nchannels, int sample_rate, int frames)
 {
-	struct audio_writer *aw;
 	unsigned char *buf;
 	int frame_bytes = nchannels * sb;
 	int i, ch;
 
-	aw = audio_writer_lame(fp, 48000, nchannels, buf_time_s, mono);
 	assert(aw != NULL);
 
 	buf = calloc((size_t)frames, (size_t)frame_bytes);
 	assert(buf != NULL);
 
 	for (i = 0; i < frames; i++) {
-		double s = 0.35 * sin(2.0 * 3.14159265358979323846 * 440.0 * i / 48000.0);
+		double s = 0.35 *
+		    sin(2.0 * 3.14159265358979323846 * 440.0 * i / (double)sample_rate);
 
 		for (ch = 0; ch < nchannels; ch++) {
 			encode_tone_sample(fmt,
@@ -401,6 +402,16 @@ write_lame_tone(FILE *fp, enum SoundIoFormat fmt, int sb, int nchannels, int mon
 	    (frames - 1) * frame_bytes, frame_bytes);
 	audio_writer_destroy(aw);
 	free(buf);
+}
+
+static void
+write_lame_tone(FILE *fp, enum SoundIoFormat fmt, int sb, int nchannels, int mono,
+    int buf_time_s, int frames)
+{
+	struct audio_writer *aw = audio_writer_lame(fp, 48000, nchannels,
+	    buf_time_s, mono);
+
+	write_writer_tone(aw, fmt, sb, nchannels, 48000, frames);
 }
 
 static void
@@ -471,6 +482,100 @@ dump_lame_formats(const char *dir)
 	return 0;
 }
 
+static void
+test_writer_sndfile(void)
+{
+	static const struct {
+		enum audio_format afmt;
+		int exp_major;
+		int exp_sub;
+		int lossless;
+		int mono;
+	} cases[] = {
+		{ AUDIO_FMT_WAV, SF_FORMAT_WAV, SF_FORMAT_PCM_16, 1, 0 },
+		{ AUDIO_FMT_WAV, SF_FORMAT_WAV, SF_FORMAT_PCM_16, 1, 1 },
+		{ AUDIO_FMT_FLAC, SF_FORMAT_FLAC, SF_FORMAT_PCM_16, 1, 0 },
+		{ AUDIO_FMT_FLAC, SF_FORMAT_FLAC, SF_FORMAT_PCM_16, 1, 1 },
+		{ AUDIO_FMT_OPUS, SF_FORMAT_OGG, SF_FORMAT_OPUS, 0, 0 },
+		{ AUDIO_FMT_OPUS, SF_FORMAT_OGG, SF_FORMAT_OPUS, 0, 1 },
+		{ AUDIO_FMT_OGG, SF_FORMAT_OGG, SF_FORMAT_VORBIS, 0, 0 },
+		{ AUDIO_FMT_OGG, SF_FORMAT_OGG, SF_FORMAT_VORBIS, 0, 1 },
+	};
+	size_t i;
+
+	assert(audio_set_format("wav") == 0);
+	assert(audio_set_format("FLAC") == 0);
+	assert(audio_set_format("opus") == 0);
+	assert(audio_set_format("ogg") == 0);
+	assert(audio_set_format("bogus") == -1);
+	assert(audio_set_format("auto") == 0);
+
+	/* Opus rejects unsupported sample rates like 44100 Hz cleanly */
+	{
+		FILE *fp = tmpfile();
+
+		assert(fp != NULL);
+		assert(audio_writer_sndfile(fp, AUDIO_FMT_OPUS, 44100, 2, 1,
+		    0) == NULL);
+		fclose(fp);
+	}
+
+	for (i = 0; i < sizeof cases / sizeof cases[0]; i++) {
+		char path[] = "/tmp/castty_sf_XXXXXX";
+		int fd = mkstemp(path);
+		FILE *fp;
+		struct audio_writer *aw;
+		SF_INFO info;
+		SNDFILE *sf;
+		float fbuf[24000 * 2];
+		sf_count_t nread;
+		double sq = 0.0;
+		int out_ch = cases[i].mono ? 1 : 2;
+		int k;
+
+		assert(fd >= 0);
+		fp = fdopen(fd, "w+b");
+		assert(fp != NULL);
+
+		aw = audio_writer_sndfile(fp, cases[i].afmt, 48000, 2, 1,
+		    cases[i].mono);
+		write_writer_tone(aw, SoundIoFormatFloat32LE, 4, 2, 48000,
+		    24000);
+		fclose(fp);
+
+		memset(&info, 0, sizeof info);
+		sf = sf_open(path, SFM_READ, &info);
+		assert(sf != NULL);
+		assert((info.format & SF_FORMAT_TYPEMASK) == cases[i].exp_major);
+		assert((info.format & SF_FORMAT_SUBMASK) == cases[i].exp_sub);
+		assert(info.samplerate == 48000);
+		assert(info.channels == out_ch);
+		assert(info.frames > 0);
+		if (cases[i].lossless) {
+			assert(info.frames == 24000);
+		}
+
+		nread = sf_readf_float(sf, fbuf, 24000);
+		assert(nread > 20000);
+		for (k = 0; k < (int)nread * out_ch; k++) {
+			sq += (double)fbuf[k] * (double)fbuf[k];
+		}
+		assert(sqrt(sq / (double)(nread * out_ch)) > 0.20);
+
+		if (cases[i].lossless) {
+			for (k = 0; k < 24000; k++) {
+				double exp_v = 0.35 *
+				    sin(2.0 * 3.14159265358979323846 * 440.0 * k / 48000.0);
+
+				assert(fabs((double)fbuf[k * out_ch] - exp_v) < 1e-4);
+			}
+		}
+
+		sf_close(sf);
+		unlink(path);
+	}
+}
+
 int
 main(int argc, char **argv)
 {
@@ -484,6 +589,7 @@ main(int argc, char **argv)
 	test_pcm_roundtrip_and_fade();
 	test_cast_inspect();
 	test_writer_lame();
+	test_writer_sndfile();
 
 	printf("C unit tests passed\n");
 	return 0;

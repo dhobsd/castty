@@ -756,6 +756,102 @@ class TestAudioLoopback(unittest.TestCase):
         max_jump = self._max_step_around(["-i", out_mp3], dur1)
         self.assertLess(max_jump, 0.08, msg=f"Pop/step jump detected at MP3 splice: {max_jump}")
 
+    def test_sndfile_formats_capture(self):
+        # Verify unsupported -F fails cleanly.
+        rc, _, _, err = run_in_pty([
+            "record", "-N", "-F", "notasoundfmt",
+            os.path.join(self.tmpdir.name, "badfmt.cast"),
+        ])
+        self.assertNotEqual(rc, 0)
+        self.assertIn("unsupported audio format", err)
+
+        cases = [
+            ("wav", "pcm_s16le", None, []),
+            ("flac", "flac", None, []),
+            ("opus", "opus", "48000", []),
+            ("ogg", "vorbis", None, []),
+            # Explicit -F overrides filename extension cleanly.
+            ("bin", "opus", "48000", ["-F", "opus"]),
+        ]
+        for idx, (ext, exp_codec, exp_rate, extra_flags) in enumerate(cases):
+            out_audio = os.path.join(self.tmpdir.name, f"cap_{idx}.{ext}")
+            cast_path = os.path.join(self.tmpdir.name, f"cap_{idx}.cast")
+            play = subprocess.Popen(["paplay", "-d", "castty_t_lsink_st", self.tone_wav])
+            try:
+                time.sleep(0.2)
+                rc, _, _, err = run_in_pty([
+                    "record", "-N", *extra_flags, "-d", self.st_dev,
+                    "-a", out_audio,
+                    "-e", "sh -c 'echo start; sleep 1.1; echo end'",
+                    cast_path,
+                ])
+            finally:
+                play.wait()
+            self.assertEqual(rc, 0, msg=f"{ext}: {err}")
+            info = ffprobe_stream(out_audio)
+            self.assertEqual(info.get("codec_name"), exp_codec, msg=f"{ext}: {info}")
+            if exp_rate is not None:
+                self.assertEqual(info.get("sample_rate"), exp_rate, msg=f"{ext}: {info}")
+            mean_db, _ = probe_volume(["-i", out_audio])
+            self.assertAlmostEqual(mean_db, self.ref_mean, delta=2.5, msg=ext)
+
+    def test_append_wav_and_opus_splice(self):
+        bad_wav = os.path.join(self.tmpdir.name, "not_wav.wav")
+        bad_cast = os.path.join(self.tmpdir.name, "not_wav.cast")
+        with open(bad_wav, "wb") as f:
+            f.write(b"not really a wav file\n")
+        rc, _, _, err = run_in_pty([
+            "record", "-N", "-A", "-d", self.st_dev, "-a", bad_wav, bad_cast,
+        ])
+        self.assertNotEqual(rc, 0)
+        self.assertIn("not a valid wav", err)
+
+        for ext, exp_codec in [("wav", "pcm_s16le"), ("opus", "opus")]:
+            out_audio = os.path.join(self.tmpdir.name, f"append_{ext}.{ext}")
+            cast_path = os.path.join(self.tmpdir.name, f"append_{ext}.cast")
+
+            play = subprocess.Popen(["paplay", "-d", "castty_t_lsink_st", self.tone_wav])
+            try:
+                time.sleep(0.2)
+                rc, _, _, err = run_in_pty([
+                    "record", "-N", "-d", self.st_dev, "-a", out_audio,
+                    "-e", "sh -c 'echo s1; sleep 1.1'", cast_path,
+                ])
+            finally:
+                play.wait()
+            self.assertEqual(rc, 0, msg=f"{ext} s1: {err}")
+            dur1 = float(ffprobe_stream(out_audio)["duration"])
+
+            # Append with MONO source onto STEREO file across formats.
+            play = subprocess.Popen(["paplay", "-d", "castty_t_lsink_mo", self.tone_wav])
+            try:
+                time.sleep(0.2)
+                rc, _, _, err = run_in_pty([
+                    "record", "-N", "-A", "-d", self.mo_dev, "-a", out_audio,
+                    "-e", "sh -c 'echo s2; sleep 1.2'", cast_path,
+                ])
+            finally:
+                play.wait()
+            self.assertEqual(rc, 0, msg=f"{ext} s2: {err}")
+            info2 = ffprobe_stream(out_audio)
+            self.assertEqual(info2.get("codec_name"), exp_codec)
+            self.assertEqual(info2.get("channels"), 2)
+            dur2 = float(info2["duration"])
+            self.assertGreater(dur2, dur1 + 0.9)
+
+            with open(cast_path, "r", encoding="utf-8") as f:
+                lines = [json.loads(l) for l in f]
+            cast_dur = sum(max(ev[0], 0.0) for ev in lines[1:])
+            self.assertAlmostEqual(cast_dur, dur2, delta=0.25, msg=ext)
+
+            mean1, _ = probe_volume(["-t", f"{max(dur1 - 0.15, 0.5):.3f}", "-i", out_audio])
+            mean2, _ = probe_volume(["-ss", f"{dur1 + 0.25:.3f}", "-t", "0.8", "-i", out_audio])
+            self.assertAlmostEqual(mean1, self.ref_mean, delta=2.5, msg=ext)
+            self.assertAlmostEqual(mean2, self.ref_mean, delta=2.5, msg=ext)
+
+            max_jump = self._max_step_around(["-i", out_audio], dur1)
+            self.assertLess(max_jump, 0.08, msg=f"Pop/step jump in {ext}: {max_jump}")
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

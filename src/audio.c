@@ -5,19 +5,23 @@
 #include <stdio.h>
 #include <stdint.h>
 #include <string.h>
+#include <strings.h>
 #include <sys/stat.h>
 
 #include <pthread.h>
 #include <unistd.h>
 
-#include <soundio/soundio.h>
 #include <lame/lame.h>
+#include <sndfile.h>
+#include <soundio/soundio.h>
 
+#include "audio.h"
 #include "castty.h"
 #include "audio/pcm.h"
 #include "audio/writer.h"
 #include "audio/writer-lame.h"
 #include "audio/writer-raw.h"
+#include "audio/writer-sndfile.h"
 
 static enum SoundIoFormat formats[] = {
 	SoundIoFormatFloat32NE,
@@ -54,6 +58,26 @@ static int rates[] = {
 	0,
 };
 
+static int opus_rates[] = {
+	48000,
+	24000,
+	16000,
+	12000,
+	8000,
+	0,
+};
+
+static int
+is_opus_rate(int rate)
+{
+	for (unsigned i = 0; opus_rates[i] != 0; i++) {
+		if (opus_rates[i] == rate) {
+			return 1;
+		}
+	}
+	return 0;
+}
+
 static struct audio_ctx {
 	const char *devid;
 	char *outpath;
@@ -67,6 +91,7 @@ static struct audio_ctx {
 	int frame_bytes;
 	FILE *fout;
 	struct audio_writer *aw;
+	enum audio_format afmt;
 	int aw_rate;
 	int fade_in_total;
 	int fade_in_pos;
@@ -91,9 +116,101 @@ static atomic_int stopping;
 static atomic_int muted;
 static atomic_int overflowed;
 static atomic_int read_err;
-static int mp3;
+static enum audio_format requested_fmt = AUDIO_FMT_AUTO;
 
 static pthread_t wthread;
+
+static const struct {
+	enum audio_format afmt;
+	const char *name;
+	const char *ext;
+} audio_fmt_table[] = {
+	{ AUDIO_FMT_RAW,  "raw",  ".raw"  },
+	{ AUDIO_FMT_MP3,  "mp3",  ".mp3"  },
+	{ AUDIO_FMT_WAV,  "wav",  ".wav"  },
+	{ AUDIO_FMT_FLAC, "flac", ".flac" },
+	{ AUDIO_FMT_OPUS, "opus", ".opus" },
+	{ AUDIO_FMT_OGG,  "ogg",  ".ogg"  },
+};
+
+static const char *
+audio_format_name(enum audio_format afmt)
+{
+	for (unsigned i = 0;
+	    i < sizeof audio_fmt_table / sizeof audio_fmt_table[0]; i++) {
+		if (audio_fmt_table[i].afmt == afmt) {
+			return audio_fmt_table[i].name;
+		}
+	}
+	return "auto";
+}
+
+static enum audio_format
+resolve_audio_format(const char *outfile)
+{
+	const char *slash, *base, *dot;
+
+	if (requested_fmt != AUDIO_FMT_AUTO) {
+		return requested_fmt;
+	}
+	if (outfile == NULL) {
+		return AUDIO_FMT_RAW;
+	}
+
+	slash = strrchr(outfile, '/');
+	base = slash ? slash + 1 : outfile;
+	dot = strrchr(base, '.');
+	if (dot == NULL) {
+		return AUDIO_FMT_RAW;
+	}
+	for (unsigned i = 0;
+	    i < sizeof audio_fmt_table / sizeof audio_fmt_table[0]; i++) {
+		if (strcasecmp(dot, audio_fmt_table[i].ext) == 0) {
+			return audio_fmt_table[i].afmt;
+		}
+	}
+	return AUDIO_FMT_RAW;
+}
+
+static struct audio_writer *
+create_audio_writer(FILE *fout, enum audio_format afmt, int rate, int mono)
+{
+	switch (afmt) {
+	case AUDIO_FMT_RAW:
+		return audio_writer_raw(fout);
+	case AUDIO_FMT_MP3:
+		return audio_writer_lame(fout, rate, 2, BUF_TIME_S, mono);
+	case AUDIO_FMT_WAV:
+	case AUDIO_FMT_FLAC:
+	case AUDIO_FMT_OPUS:
+	case AUDIO_FMT_OGG:
+		return audio_writer_sndfile(fout, afmt, rate, 2, BUF_TIME_S,
+		    mono);
+	case AUDIO_FMT_AUTO:
+		break;
+	}
+	return NULL;
+}
+
+int
+audio_set_format(const char *fmt_name)
+{
+	if (fmt_name == NULL) {
+		return -1;
+	}
+	if (strcasecmp(fmt_name, "auto") == 0) {
+		requested_fmt = AUDIO_FMT_AUTO;
+		return 0;
+	}
+	for (unsigned i = 0;
+	    i < sizeof audio_fmt_table / sizeof audio_fmt_table[0]; i++) {
+		if (strcasecmp(fmt_name, audio_fmt_table[i].name) == 0) {
+			requested_fmt = audio_fmt_table[i].afmt;
+			return 0;
+		}
+	}
+	return -1;
+}
 
 static void
 audio_teardown_backend(void)
@@ -128,7 +245,8 @@ write_zero_frames(struct audio_writer *aw, enum SoundIoFormat fmt,
 		ZERO_CHUNK_FRAMES = 4096,
 	};
 	unsigned char *zbuf;
-	size_t chunk_bytes = (size_t)ZERO_CHUNK_FRAMES * frame_bytes;
+	size_t chunk_bytes = (size_t)ZERO_CHUNK_FRAMES * (size_t)frame_bytes;
+	int sample_bytes = pcm_sample_bytes(fmt);
 
 	if (nframes == 0) {
 		return;
@@ -138,15 +256,94 @@ write_zero_frames(struct audio_writer *aw, enum SoundIoFormat fmt,
 		perror("calloc");
 		exit(EXIT_FAILURE);
 	}
+	/* Replicate an encoded 0.0 frame so unsigned formats stay at midscale silence. */
+	if (sample_bytes > 0 && frame_bytes >= sample_bytes &&
+	    frame_bytes % sample_bytes == 0) {
+		int nch = frame_bytes / sample_bytes;
+		int ch;
+
+		for (ch = 0; ch < nch; ch++) {
+			pcm_encode_sample(fmt, zbuf + (size_t)ch * (size_t)sample_bytes,
+			    0.0f);
+		}
+		for (int i = 1; i < ZERO_CHUNK_FRAMES; i++) {
+			memcpy(zbuf + (size_t)i * (size_t)frame_bytes, zbuf,
+			    (size_t)frame_bytes);
+		}
+	}
 	while (nframes > 0) {
 		uint64_t chunk = nframes > ZERO_CHUNK_FRAMES ?
 		    ZERO_CHUNK_FRAMES : nframes;
 
 		audio_writer_write(aw, fmt, (char *)zbuf,
-		    (int)(chunk * frame_bytes), frame_bytes);
+		    (int)(chunk * (uint64_t)frame_bytes), frame_bytes);
 		nframes -= chunk;
 	}
 	free(zbuf);
+}
+
+static uint64_t
+pad_audio_to_target(enum SoundIoFormat fmt, int frame_bytes, int rate,
+    uint64_t pre_frames)
+{
+	if (ctx.target_cast_ms > 0.0 && rate > 0) {
+		double cur_ms = ((double)pre_frames * 1000.0) / (double)rate;
+
+		if (cur_ms < ctx.target_cast_ms) {
+			uint64_t want = (uint64_t)llround(ctx.target_cast_ms *
+			    (double)rate / 1000.0);
+
+			if (want > pre_frames) {
+				write_zero_frames(ctx.aw, fmt, frame_bytes,
+				    want - pre_frames);
+				pre_frames = want;
+			}
+		}
+	}
+	return pre_frames;
+}
+
+static int
+probe_sndfile_file(const char *path, enum audio_format afmt, int *rate_out,
+    int *stereo_out, char *errbuf, size_t errsz)
+{
+	SF_INFO info;
+	SNDFILE *sf;
+	int expected_sf, got_major, exp_major;
+
+	expected_sf = audio_sndfile_format(afmt);
+	memset(&info, 0, sizeof info);
+	sf = sf_open(path, SFM_READ, &info);
+	if (sf == NULL) {
+		snprintf(errbuf, errsz, "castty: %s is not a valid %s file: %s",
+		    path, audio_format_name(afmt), sf_strerror(NULL));
+		return -1;
+	}
+	sf_close(sf);
+
+	got_major = info.format & SF_FORMAT_TYPEMASK;
+	exp_major = expected_sf & SF_FORMAT_TYPEMASK;
+	if (got_major != exp_major ||
+	    (exp_major == SF_FORMAT_OGG &&
+	    (info.format & SF_FORMAT_SUBMASK) != (expected_sf & SF_FORMAT_SUBMASK))) {
+		snprintf(errbuf, errsz,
+		    "castty: %s is not in %s format", path,
+		    audio_format_name(afmt));
+		return -1;
+	}
+	if (info.samplerate <= 0 || info.channels <= 0 || info.frames <= 0) {
+		snprintf(errbuf, errsz,
+		    "castty: %s contains no valid audio frames", path);
+		return -1;
+	}
+
+	if (rate_out) {
+		*rate_out = info.samplerate;
+	}
+	if (stereo_out) {
+		*stereo_out = (info.channels >= 2);
+	}
+	return 0;
 }
 
 static int
@@ -229,26 +426,26 @@ probe_mp3_file(const char *path, int *rate_out, int *stereo_out, char *errbuf,
 	return 0;
 }
 
-static uint64_t
-prepare_mp3_append(void)
+struct append_splice {
+	int src_rate;
+	int dst_rate;
+	int fade_dst;
+	int trim_tail_dst;
+	int hold_target;
+	int hold_cap;
+	int hold_len;
+	float *hold;
+	int have_prev;
+	float prev_l;
+	float prev_r;
+	double phase;
+	double step;
+	uint64_t pre_frames;
+};
+
+static void
+open_append_temp_writer(void)
 {
-	FILE *src_fp;
-	hip_t hip;
-	unsigned char buf[4096];
-	short dl[1152], dr[1152];
-	mp3data_struct md;
-	int enc_delay = -1, enc_padding = -1;
-	int src_rate = 0, src_ch = 0;
-	int dst_rate = ctx.stream->sample_rate;
-	int skip_head = 0, trim_tail_dst = 0;
-	int fade_dst = dst_rate / 100;
-	int hold_target = 0, hold_cap = 0, hold_len = 0;
-	float *hold = NULL;
-	int have_prev = 0;
-	float prev_l = 0.0f, prev_r = 0.0f;
-	double phase = 0.0, step = 1.0;
-	uint64_t pre_frames = 0;
-	size_t nr;
 	int tfd;
 	size_t tlen;
 
@@ -272,13 +469,142 @@ prepare_mp3_append(void)
 		exit(EXIT_FAILURE);
 	}
 
-	ctx.aw_rate = dst_rate;
-	ctx.aw = audio_writer_lame(ctx.fout, dst_rate, 2, BUF_TIME_S,
+	ctx.aw_rate = ctx.stream->sample_rate;
+	ctx.aw = create_audio_writer(ctx.fout, ctx.afmt, ctx.aw_rate,
 	    ctx.mono && !ctx.existing_stereo);
 	if (ctx.aw == NULL) {
-		fprintf(stderr, "Couldn't create MP3 writer\n");
+		fprintf(stderr, "Couldn't create %s writer\n",
+		    audio_format_name(ctx.afmt));
 		exit(EXIT_FAILURE);
 	}
+}
+
+static void
+append_splice_init(struct append_splice *sp, int src_rate, int dst_rate,
+    int trim_src)
+{
+	memset(sp, 0, sizeof *sp);
+	sp->src_rate = src_rate;
+	sp->dst_rate = dst_rate;
+	sp->fade_dst = dst_rate / 100;
+	sp->step = (double)src_rate / (double)dst_rate;
+	sp->trim_tail_dst = (trim_src > 0) ?
+	    (int)llround((double)trim_src * dst_rate / src_rate) : 0;
+	sp->hold_target = sp->trim_tail_dst + sp->fade_dst;
+	sp->hold_cap = sp->hold_target + 4096;
+	sp->hold = calloc((size_t)sp->hold_cap * 2, sizeof *sp->hold);
+	if (sp->hold == NULL) {
+		perror("calloc");
+		exit(EXIT_FAILURE);
+	}
+}
+
+static void
+append_splice_push_dst(struct append_splice *sp, float sl, float sr)
+{
+	sp->hold[(size_t)sp->hold_len * 2] = sl;
+	sp->hold[(size_t)sp->hold_len * 2 + 1] = sr;
+	sp->hold_len++;
+
+	if (sp->hold_len >= sp->hold_cap) {
+		int flush_n = sp->hold_len - sp->hold_target;
+
+		audio_writer_write(ctx.aw, SoundIoFormatFloat32NE,
+		    (char *)sp->hold, flush_n * 2 * (int)sizeof(float),
+		    2 * (int)sizeof(float));
+		sp->pre_frames += (uint64_t)flush_n;
+		memmove(sp->hold, sp->hold + (size_t)flush_n * 2,
+		    (size_t)sp->hold_target * 2 * sizeof *sp->hold);
+		sp->hold_len = sp->hold_target;
+	}
+}
+
+static void
+append_splice_push(struct append_splice *sp, float sl, float sr)
+{
+	if (sp->src_rate == sp->dst_rate) {
+		append_splice_push_dst(sp, sl, sr);
+		return;
+	}
+	if (!sp->have_prev) {
+		sp->prev_l = sl;
+		sp->prev_r = sr;
+		sp->have_prev = 1;
+		sp->phase = 0.0;
+		return;
+	}
+	while (sp->phase < 1.0) {
+		double frac = sp->phase;
+
+		append_splice_push_dst(sp,
+		    (float)(sp->prev_l + frac * (sl - sp->prev_l)),
+		    (float)(sp->prev_r + frac * (sr - sp->prev_r)));
+		sp->phase += sp->step;
+	}
+	sp->phase -= 1.0;
+	sp->prev_l = sl;
+	sp->prev_r = sr;
+}
+
+static uint64_t
+append_splice_finish(struct append_splice *sp)
+{
+	if (sp->hold == NULL) {
+		return pad_audio_to_target(SoundIoFormatFloat32NE,
+		    2 * (int)sizeof(float), sp->dst_rate, 0);
+	}
+	if (sp->src_rate != sp->dst_rate && sp->have_prev) {
+		append_splice_push_dst(sp, sp->prev_l, sp->prev_r);
+	}
+	if (sp->hold_len > 0) {
+		int trim = MIN(sp->hold_len, sp->trim_tail_dst);
+		int rem = sp->hold_len - trim;
+		int fade_n = MIN(rem, sp->fade_dst);
+		int unfaded = rem - fade_n;
+
+		if (unfaded > 0) {
+			audio_writer_write(ctx.aw, SoundIoFormatFloat32NE,
+			    (char *)sp->hold,
+			    unfaded * 2 * (int)sizeof(float),
+			    2 * (int)sizeof(float));
+			sp->pre_frames += (uint64_t)unfaded;
+		}
+		if (fade_n > 0) {
+			pcm_fade_frames(SoundIoFormatFloat32NE,
+			    (unsigned char *)(sp->hold + (size_t)unfaded * 2),
+			    fade_n, 2, 2 * (int)sizeof(float),
+			    (int)sizeof(float), 0, fade_n, 1);
+			audio_writer_write(ctx.aw, SoundIoFormatFloat32NE,
+			    (char *)(sp->hold + (size_t)unfaded * 2),
+			    fade_n * 2 * (int)sizeof(float),
+			    2 * (int)sizeof(float));
+			sp->pre_frames += (uint64_t)fade_n;
+		}
+	}
+
+	free(sp->hold);
+	sp->hold = NULL;
+	return pad_audio_to_target(SoundIoFormatFloat32NE,
+	    2 * (int)sizeof(float), sp->dst_rate, sp->pre_frames);
+}
+
+static uint64_t
+prepare_mp3_append(void)
+{
+	FILE *src_fp;
+	hip_t hip;
+	unsigned char buf[4096];
+	short dl[1152], dr[1152];
+	mp3data_struct md;
+	struct append_splice sp;
+	int enc_delay = -1, enc_padding = -1;
+	int src_rate = 0, src_ch = 0, skip_head = 0;
+	int dst_rate = ctx.stream->sample_rate;
+	size_t nr;
+
+	open_append_temp_writer();
+	memset(&sp, 0, sizeof sp);
+	sp.dst_rate = dst_rate;
 
 	src_fp = fopen(ctx.outpath, "rb");
 	if (src_fp == NULL) {
@@ -315,23 +641,14 @@ prepare_mp3_append(void)
 				break;
 			}
 			if (src_rate == 0 && md.header_parsed) {
-				int trim_src;
+				int trim_src = (enc_delay >= 0 &&
+				    enc_padding >= 528) ? (enc_padding - 528) : 0;
 
 				src_rate = md.samplerate;
 				src_ch = md.stereo;
-				step = (double)src_rate / (double)dst_rate;
 				skip_head = (enc_delay >= 0) ? (enc_delay + 528) : 0;
-				trim_src = (enc_delay >= 0 && enc_padding >= 528) ?
-				    (enc_padding - 528) : 0;
-				trim_tail_dst = (int)llround((double)trim_src *
-				    dst_rate / src_rate);
-				hold_target = trim_tail_dst + fade_dst;
-				hold_cap = hold_target + 4096;
-				hold = calloc((size_t)hold_cap * 2, sizeof *hold);
-				if (hold == NULL) {
-					perror("calloc");
-					exit(EXIT_FAILURE);
-				}
+				append_splice_init(&sp, src_rate, dst_rate,
+				    trim_src);
 			}
 			if (src_rate == 0) {
 				continue;
@@ -346,60 +663,7 @@ prepare_mp3_append(void)
 				}
 				sl = (float)dl[i] / 32768.0f;
 				sr = (src_ch > 1) ? ((float)dr[i] / 32768.0f) : sl;
-
-				if (src_rate == dst_rate) {
-					hold[(size_t)hold_len * 2] = sl;
-					hold[(size_t)hold_len * 2 + 1] = sr;
-					hold_len++;
-				} else if (!have_prev) {
-					prev_l = sl;
-					prev_r = sr;
-					have_prev = 1;
-					phase = 0.0;
-				} else {
-					while (phase < 1.0) {
-						double frac = phase;
-
-						hold[(size_t)hold_len * 2] =
-						    (float)(prev_l + frac * (sl - prev_l));
-						hold[(size_t)hold_len * 2 + 1] =
-						    (float)(prev_r + frac * (sr - prev_r));
-						hold_len++;
-						if (hold_len >= hold_cap) {
-							int flush_n = hold_len - hold_target;
-
-							audio_writer_write(ctx.aw,
-							    SoundIoFormatFloat32NE,
-							    (char *)hold,
-							    flush_n * 2 * (int)sizeof(float),
-							    2 * (int)sizeof(float));
-							pre_frames += (uint64_t)flush_n;
-							memmove(hold,
-							    hold + (size_t)flush_n * 2,
-							    (size_t)hold_target * 2 * sizeof *hold);
-							hold_len = hold_target;
-						}
-						phase += step;
-					}
-					phase -= 1.0;
-					prev_l = sl;
-					prev_r = sr;
-				}
-
-				if (hold_len >= hold_cap) {
-					int flush_n = hold_len - hold_target;
-
-					audio_writer_write(ctx.aw,
-					    SoundIoFormatFloat32NE,
-					    (char *)hold,
-					    flush_n * 2 * (int)sizeof(float),
-					    2 * (int)sizeof(float));
-					pre_frames += (uint64_t)flush_n;
-					memmove(hold,
-					    hold + (size_t)flush_n * 2,
-					    (size_t)hold_target * 2 * sizeof *hold);
-					hold_len = hold_target;
-				}
+				append_splice_push(&sp, sl, sr);
 			}
 		}
 
@@ -408,58 +672,57 @@ prepare_mp3_append(void)
 		}
 	}
 
-	if (src_rate != dst_rate && have_prev && hold != NULL && hold_len < hold_cap) {
-		hold[(size_t)hold_len * 2] = prev_l;
-		hold[(size_t)hold_len * 2 + 1] = prev_r;
-		hold_len++;
-	}
-
-	if (hold != NULL && hold_len > 0) {
-		int trim = MIN(hold_len, trim_tail_dst);
-		int rem = hold_len - trim;
-		int fade_n = MIN(rem, fade_dst);
-		int unfaded = rem - fade_n;
-
-		if (unfaded > 0) {
-			audio_writer_write(ctx.aw, SoundIoFormatFloat32NE,
-			    (char *)hold,
-			    unfaded * 2 * (int)sizeof(float),
-			    2 * (int)sizeof(float));
-			pre_frames += (uint64_t)unfaded;
-		}
-		if (fade_n > 0) {
-			pcm_fade_frames(SoundIoFormatFloat32NE,
-			    (unsigned char *)(hold + (size_t)unfaded * 2),
-			    fade_n, 2, 2 * (int)sizeof(float),
-			    (int)sizeof(float), 0, fade_n, 1);
-			audio_writer_write(ctx.aw, SoundIoFormatFloat32NE,
-			    (char *)(hold + (size_t)unfaded * 2),
-			    fade_n * 2 * (int)sizeof(float),
-			    2 * (int)sizeof(float));
-			pre_frames += (uint64_t)fade_n;
-		}
-	}
-
-	free(hold);
 	hip_decode_exit(hip);
 	fclose(src_fp);
+	return append_splice_finish(&sp);
+}
 
-	if (ctx.target_cast_ms > 0.0) {
-		double cur_ms = ((double)pre_frames * 1000.0) / (double)dst_rate;
+static uint64_t
+prepare_sndfile_append(void)
+{
+	enum {
+		SF_APPEND_CHUNK = 4096,
+	};
+	SF_INFO info;
+	SNDFILE *sf;
+	struct append_splice sp;
+	float *inbuf;
+	sf_count_t nread;
 
-		if (cur_ms < ctx.target_cast_ms) {
-			uint64_t want = (uint64_t)llround(ctx.target_cast_ms *
-			    (double)dst_rate / 1000.0);
+	open_append_temp_writer();
 
-			if (want > pre_frames) {
-				write_zero_frames(ctx.aw, SoundIoFormatFloat32NE,
-				    2 * (int)sizeof(float), want - pre_frames);
-				pre_frames = want;
-			}
+	memset(&info, 0, sizeof info);
+	sf = sf_open(ctx.outpath, SFM_READ, &info);
+	if (sf == NULL) {
+		fprintf(stderr, "Couldn't open %s for append: %s\n",
+		    ctx.outpath, sf_strerror(NULL));
+		exit(EXIT_FAILURE);
+	}
+
+	inbuf = calloc((size_t)SF_APPEND_CHUNK * (size_t)info.channels,
+	    sizeof *inbuf);
+	if (inbuf == NULL) {
+		perror("calloc");
+		sf_close(sf);
+		exit(EXIT_FAILURE);
+	}
+
+	append_splice_init(&sp, info.samplerate, ctx.stream->sample_rate, 0);
+	while ((nread = sf_readf_float(sf, inbuf, SF_APPEND_CHUNK)) > 0) {
+		sf_count_t i;
+
+		for (i = 0; i < nread; i++) {
+			float sl = inbuf[i * info.channels];
+			float sr = (info.channels > 1) ?
+			    inbuf[i * info.channels + 1] : sl;
+
+			append_splice_push(&sp, sl, sr);
 		}
 	}
 
-	return pre_frames;
+	free(inbuf);
+	sf_close(sf);
+	return append_splice_finish(&sp);
 }
 
 static uint64_t
@@ -530,23 +793,8 @@ prepare_raw_append(void)
 		exit(EXIT_FAILURE);
 	}
 
-	if (ctx.target_cast_ms > 0.0) {
-		double cur_ms = ((double)frames * 1000.0) /
-		    (double)ctx.stream->sample_rate;
-
-		if (cur_ms < ctx.target_cast_ms) {
-			uint64_t want = (uint64_t)llround(ctx.target_cast_ms *
-			    (double)ctx.stream->sample_rate / 1000.0);
-
-			if (want > frames) {
-				write_zero_frames(ctx.aw, ctx.format,
-				    ctx.frame_bytes, want - frames);
-				frames = want;
-			}
-		}
-	}
-
-	return frames;
+	return pad_audio_to_target(ctx.format, ctx.frame_bytes,
+	    ctx.stream->sample_rate, frames);
 }
 
 static void *
@@ -707,7 +955,8 @@ void
 audio_toggle_mp3(void)
 {
 
-	mp3 = !mp3;
+	requested_fmt = (requested_fmt == AUDIO_FMT_MP3) ?
+	    AUDIO_FMT_RAW : AUDIO_FMT_MP3;
 }
 
 void
@@ -824,16 +1073,19 @@ audio_start(void)
 	}
 
 	int target_rate = ctx.aw_rate > 0 ? ctx.aw_rate : ctx.pref_rate;
+	const int *cand_rates = (ctx.afmt == AUDIO_FMT_OPUS) ? opus_rates : rates;
 
 	if (target_rate > 0 &&
 	    soundio_device_supports_sample_rate(ctx.dev, target_rate)) {
 		ctx.stream->sample_rate = target_rate;
 	} else {
-		for (unsigned i = 0; i < sizeof rates / sizeof rates[0]; i++) {
-			if (rates[i] == 0) {
+		for (unsigned i = 0;; i++) {
+			if (cand_rates[i] == 0) {
 				if (ctx.dev->sample_rate_current > 0 &&
 				    soundio_device_supports_sample_rate(ctx.dev,
-				    ctx.dev->sample_rate_current)) {
+				    ctx.dev->sample_rate_current) &&
+				    (ctx.afmt != AUDIO_FMT_OPUS ||
+				    is_opus_rate(ctx.dev->sample_rate_current))) {
 					ctx.stream->sample_rate = ctx.dev->sample_rate_current;
 					break;
 				}
@@ -842,8 +1094,8 @@ audio_start(void)
 				exit(EXIT_FAILURE);
 			}
 
-			if (soundio_device_supports_sample_rate(ctx.dev, rates[i])) {
-				ctx.stream->sample_rate = rates[i];
+			if (soundio_device_supports_sample_rate(ctx.dev, cand_rates[i])) {
+				ctx.stream->sample_rate = cand_rates[i];
 				break;
 			}
 		}
@@ -882,8 +1134,10 @@ audio_start(void)
 		uint64_t pre_frames = 0;
 
 		if (ctx.append && stat(ctx.outpath, &st) == 0 && st.st_size > 0) {
-			if (mp3) {
+			if (ctx.afmt == AUDIO_FMT_MP3) {
 				pre_frames = prepare_mp3_append();
+			} else if (audio_sndfile_format(ctx.afmt) != 0) {
+				pre_frames = prepare_sndfile_append();
 			} else {
 				pre_frames = prepare_raw_append();
 			}
@@ -894,19 +1148,18 @@ audio_start(void)
 				ctx.fout = xfopen(ctx.outpath, "w+b");
 			}
 			ctx.aw_rate = ctx.stream->sample_rate;
-			ctx.aw = mp3 ? audio_writer_lame(ctx.fout, ctx.aw_rate, 2,
-			    BUF_TIME_S, ctx.mono) : audio_writer_raw(ctx.fout);
+			ctx.aw = create_audio_writer(ctx.fout, ctx.afmt,
+			    ctx.aw_rate, ctx.mono);
 			if (ctx.aw == NULL) {
 				fprintf(stderr,
-				    "castty was not compiled with support for the selected format\n");
+				    "Couldn't initialize %s audio writer\n",
+				    audio_format_name(ctx.afmt));
 				exit(EXIT_FAILURE);
 			}
 			if (ctx.append && ctx.target_cast_ms > 0.0) {
-				pre_frames = (uint64_t)llround(ctx.target_cast_ms *
-				    (double)ctx.aw_rate / 1000.0);
+				pre_frames = pad_audio_to_target(ctx.format,
+				    ctx.frame_bytes, ctx.aw_rate, 0);
 				if (pre_frames > 0) {
-					write_zero_frames(ctx.aw, ctx.format,
-					    ctx.frame_bytes, pre_frames);
 					ctx.base_clock_ms = ((double)pre_frames * 1000.0) /
 					    (double)ctx.aw_rate;
 				}
@@ -950,10 +1203,13 @@ int
 audio_check_append(const char *outfile, char *errbuf, size_t errsz)
 {
 	struct stat st;
+	enum audio_format afmt;
 
 	if (outfile == NULL) {
 		return 0;
 	}
+	afmt = resolve_audio_format(outfile);
+	ctx.afmt = afmt;
 	if (stat(outfile, &st) != 0) {
 		if (errno == ENOENT) {
 			return 0;
@@ -965,10 +1221,20 @@ audio_check_append(const char *outfile, char *errbuf, size_t errsz)
 	if (st.st_size == 0) {
 		return 0;
 	}
-	if (mp3) {
+	if (afmt == AUDIO_FMT_MP3) {
 		int rate = 0, stereo = 0;
 
 		if (probe_mp3_file(outfile, &rate, &stereo, errbuf, errsz) != 0) {
+			return -1;
+		}
+		ctx.pref_rate = rate;
+		ctx.existing_stereo = stereo;
+		return 0;
+	} else if (audio_sndfile_format(afmt) != 0) {
+		int rate = 0, stereo = 0;
+
+		if (probe_sndfile_file(outfile, afmt, &rate, &stereo, errbuf,
+		    errsz) != 0) {
 			return -1;
 		}
 		ctx.pref_rate = rate;
@@ -997,6 +1263,7 @@ audio_init_append(const char *devid, const char *outfile, int use_raw,
 	ctx.started = 0;
 	ctx.prepared = 0;
 	ctx.append = append;
+	ctx.afmt = resolve_audio_format(outfile);
 	ctx.target_cast_ms = target_cast_ms;
 	ctx.base_clock_ms = 0.0;
 	ctx.aw = NULL;
