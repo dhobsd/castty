@@ -24,6 +24,7 @@ struct termios tt;
 FILE *debug_out;
 int masterfd;
 pid_t child;
+volatile sig_atomic_t ctrl_write_fd = -1;
 
 static void
 set_raw_input(void)
@@ -45,26 +46,54 @@ set_raw_input(void)
 static char *
 escape(const char *from)
 {
-	unsigned i, o;
+	unsigned char c;
+	size_t i, o, len;
 	char *p;
 
 	assert(from);
 
-	p = malloc(strlen(from) * 2 + 1);
+	len = strlen(from);
+	p = malloc(len * 6 + 1);
 	if (p == NULL) {
 		perror("malloc");
 		exit(EXIT_FAILURE);
 	}
 
-	for (i = 0, o = 0; i < strlen(from); i++) {
-		switch (from[i]) {
+	for (i = 0, o = 0; i < len; i++) {
+		c = (unsigned char)from[i];
+		switch (c) {
 		case '\\':
 		case '"':
 			p[o++] = '\\';
-			p[o++] = from[i];
+			p[o++] = (char)c;
+			break;
+		case '\b':
+			p[o++] = '\\';
+			p[o++] = 'b';
+			break;
+		case '\f':
+			p[o++] = '\\';
+			p[o++] = 'f';
+			break;
+		case '\n':
+			p[o++] = '\\';
+			p[o++] = 'n';
+			break;
+		case '\r':
+			p[o++] = '\\';
+			p[o++] = 'r';
+			break;
+		case '\t':
+			p[o++] = '\\';
+			p[o++] = 't';
 			break;
 		default:
-			p[o++] = from[i];
+			if (c < 0x20) {
+				o += sprintf(&p[o], "\\u%04x", c);
+			} else {
+				p[o++] = (char)c;
+			}
+			break;
 		}
 	}
 
@@ -94,32 +123,32 @@ serialize_env(void)
 	p[o++] = '{';
 
 	for (unsigned i = 0; environ[i] != NULL; i++) {
-		char *e, *k, *v;
-		int useful, rv;
-		size_t l;
+		const char *eq, *k;
+		char *v;
+		size_t klen, l;
+		int rv;
 
-		e = escape(environ[i]);
-
-		k = e;
-		v = strchr(e, '=');
-		if (v == NULL) {
+		eq = strchr(environ[i], '=');
+		if (eq == NULL) {
 			fprintf(stderr, "Your environment is whack.\n");
 			exit(EXIT_FAILURE);
 		}
 
-		*v++ = '\0';
-
-		useful = 0;
+		klen = (size_t)(eq - environ[i]);
+		k = NULL;
 		for (unsigned j = 0; j < sizeof interesting / sizeof interesting[0]; j++) {
-			if (strcmp(k, interesting[j]) == 0) {
-				useful = 1;
+			if (strlen(interesting[j]) == klen &&
+			    strncmp(environ[i], interesting[j], klen) == 0) {
+				k = interesting[j];
 				break;
 			}
 		}
 
-		if (!useful) {
-			goto not_useful;
+		if (k == NULL) {
+			continue;
 		}
+
+		v = escape(eq + 1);
 
 		l = strlen(k) + strlen(v);
 		/* 7 is for two sets of quotes, a colon, a comma, and a 0 byte */
@@ -143,13 +172,14 @@ serialize_env(void)
 		assert((unsigned)rv < s - o);
 		o += rv;
 
-not_useful:	free(e);
+		free(v);
 	}
 
-	if (p[o - 1] == ',') {
+	if (o > 1 && p[o - 1] == ',') {
 		p[o - 1] = '}';
 	} else {
-		p[o] = '}';
+		p[o++] = '}';
+		p[o] = '\0';
 	}
 
 	return p;
@@ -159,7 +189,9 @@ static void
 usage(int status)
 {
 
-	fprintf(stderr, "usage: castty record [-acDdehl" LAME_OPT "prt] [out.cast]\n"
+	fprintf(stderr, "usage: castty record [-23acDdehl" LAME_OPT "prt] [out.cast]\n"
+	    " -2             Output asciicast v2 instead of asciicast v1 format.\n"
+	    " -3             Output asciicast v3 instead of asciicast v1 format.\n"
 	    " -a <outfile>   Output audio to <outfile>. Must be specified with -d.\n"
 	    " -c <cols>      Use <cols> columns in the recorded shell session.\n"
 	    " -D <outfile>   Send debugging information into <outfile>.\n"
@@ -176,8 +208,7 @@ usage(int status)
 	    " -t <title>     Title of the cast.\n"
 	    "\n"
 	    " [out.cast]     Optional output filename of recorded events. If not specified,\n"
-	    "                a file \"events.cast\" will be created.\n"
-	    " -2             Output asciicast v2 instead of asciicast v1 format.\n");
+	    "                a file \"events.cast\" will be created.\n");
 	exit(status);
 }
 
@@ -188,13 +219,18 @@ record_main(int argc, char **argv)
 	extern char *optarg;
 	extern int optind;
 	struct outargs oa;
-	char *exec_cmd;
+	char *exec_cmd, *term;
 
 	memset(&oa, 0, sizeof oa);
 	oa.env = serialize_env();
+	term = getenv("TERM");
+	if (term && *term) {
+		oa.term_type = escape(term);
+	}
+	oa.timestamp = time(NULL);
 	exec_cmd = NULL;
 
-	while ((ch = getopt(argc, argv, "?a:c:D:d:e:hlpr:Rt:2" LAME_OPT)) != EOF) {
+	while ((ch = getopt(argc, argv, "?a:c:D:d:e:hlpr:Rt:23" LAME_OPT)) != EOF) {
 		char *e;
 
 		switch (ch) {
@@ -232,6 +268,9 @@ record_main(int argc, char **argv)
 			break;
 		case '2':
 			oa.format_version = 2;
+			break;
+		case '3':
+			oa.format_version = 3;
 			break;
 		case 'r':
 			errno = 0;
@@ -318,6 +357,13 @@ record_main(int argc, char **argv)
 	}
 
 	if (child == 0) {
+		struct sigaction dfl;
+
+		memset(&dfl, 0, sizeof dfl);
+		(void)sigemptyset(&dfl.sa_mask);
+		dfl.sa_handler = SIG_DFL;
+		xsigaction(SIGCHLD, &dfl, NULL);
+
 		pid_t subchild = fork();
 		if (subchild < 0) {
 			perror("fork");
@@ -333,6 +379,7 @@ record_main(int argc, char **argv)
 		if (subchild) {
 			/* Handle output to file in parent */
 			xclose(controlfd[1]);
+			oa.shellpid = subchild;
 			outputproc(&oa);
 		} else {
 			char *shell = getenv("SHELL");
@@ -350,7 +397,10 @@ record_main(int argc, char **argv)
 	}
 
 	xclose(controlfd[0]);
+	ctrl_write_fd = controlfd[1];
 	inputproc(masterfd, controlfd[1]);
+	ctrl_write_fd = -1;
+	xclose(controlfd[1]);
 
 	signal(SIGWINCH, NULL);
 
