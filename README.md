@@ -40,9 +40,10 @@ installed to a location other than `/usr/local/`, you will have to edit the
 
 ## Usage
 
-    usage: castty record [-23acDdehlmprt] [out.cast]
-     -2             Output asciicast v2 instead of asciicast v1 format.
-     -3             Output asciicast v3 instead of asciicast v1 format.
+    usage: castty record [-123acDdehlmprt] [out.cast]
+     -1             Output asciicast v1 format.
+     -2             Output asciicast v2 format.
+     -3             Output asciicast v3 format (default).
      -a <outfile>   Output audio to <outfile>. Must be specified with -d.
      -c <cols>      Use <cols> columns in the recorded shell session.
      -D <outfile>   Send debugging information into <outfile>.
@@ -79,7 +80,7 @@ audio into more useful formats for web publication.
     % sox -D -r 44100 -e signed -b 16 -c 2 -L audio.raw audio.wav
 
 By default, CasTTY does _not_ record audio and sends its terminal event output
-to a file called `events.js`.
+to a file called `events.cast`.
 
 ### Runtime Commands
 
@@ -105,13 +106,18 @@ window size.
 CasTTY supports UTF-8 input.
 
 CasTTY outputs in
-[asciicast v1](https://github.com/asciinema/asciinema/blob/master/doc/asciicast-v1.md)
-format by default, or
-[asciicast v2](https://github.com/asciinema/asciinema/blob/master/doc/asciicast-v2.md)
-(`-2`) and
 [asciicast v3](https://docs.asciinema.org/manual/asciicast/v3/)
-(`-3`). Its output files should be compatible with the asciinema player
+format by default, and also supports
+[asciicast v1](https://github.com/asciinema/asciinema/blob/master/doc/asciicast-v1.md)
+(`-1`) and
+[asciicast v2](https://github.com/asciinema/asciinema/blob/master/doc/asciicast-v2.md)
+(`-2`). Its output files should be compatible with the asciinema player
 (though that player does not support audio).
+
+You can upgrade older asciicast v1/v2 recordings or legacy CasTTY `_tre`/`_ti`
+files to asciicast v3 with `tools/castty-upgrade`:
+
+    % ./tools/castty-upgrade old.cast -o upgraded.cast
 
 ## Web Interface
 
@@ -131,4 +137,4 @@ Licenses for all these utilities can be found in their respective repositories
 and in the LICENSE file in this repository.
 
 To create a cast, simply modify `ui/index.html` to point to the correct audio
-file and `events.js` output from `castty`.
+file and `events.cast` output from `castty`.

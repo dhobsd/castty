@@ -1,0 +1,367 @@
+#!/usr/bin/env python3
+"""Upgrade legacy CasTTY (_tre/_ti) and asciicast v1/v2 recordings to v3."""
+
+import argparse
+import json
+import os
+import re
+import stat
+import sys
+import tempfile
+
+
+def _round_sec(val):
+    return round(max(float(val), 0.0), 6)
+
+
+def _dump_json(obj):
+    return json.dumps(obj, ensure_ascii=False, separators=(",", ":"))
+
+
+def _build_v3_header(
+    cols,
+    rows,
+    term_type=None,
+    theme=None,
+    timestamp=None,
+    idle_time_limit=None,
+    command=None,
+    title=None,
+    env=None,
+):
+    term = {
+        "cols": int(cols or 80),
+        "rows": int(rows or 24),
+    }
+    if term_type:
+        term["type"] = term_type
+    if isinstance(theme, dict) and theme:
+        term["theme"] = theme
+
+    hdr = {
+        "version": 3,
+        "term": term,
+    }
+    if timestamp is not None:
+        hdr["timestamp"] = timestamp
+    if idle_time_limit is not None:
+        hdr["idle_time_limit"] = idle_time_limit
+    if command:
+        hdr["command"] = command
+    if title:
+        hdr["title"] = title
+    if isinstance(env, dict) and env:
+        hdr["env"] = env
+    return hdr
+
+
+def _apply_header_overrides(hdr, args):
+    term = hdr.setdefault("term", {})
+    if args.cols is not None:
+        term["cols"] = args.cols
+    if args.rows is not None:
+        term["rows"] = args.rows
+    if args.term is not None:
+        term["type"] = args.term
+    if args.title is not None:
+        hdr["title"] = args.title
+
+
+def _extract_js_assignments(text):
+    """Parse top-level `[var|let|const] name = <json>;` statements cleanly."""
+    decoder = json.JSONDecoder()
+    assigns = {}
+    ordered = []
+    pos = 0
+    n = len(text)
+    stmt_re = re.compile(
+        r"(?:(?:var|let|const)\s+)?([A-Za-z_$][A-Za-z0-9_$]*)\s*=\s*"
+    )
+
+    while pos < n:
+        while pos < n and (text[pos].isspace() or text[pos] == ";"):
+            pos += 1
+        if pos >= n:
+            break
+        if text.startswith("//", pos):
+            nl = text.find("\n", pos)
+            pos = n if nl == -1 else nl + 1
+            continue
+        if text.startswith("/*", pos):
+            end = text.find("*/", pos + 2)
+            pos = n if end == -1 else end + 2
+            continue
+
+        match = stmt_re.match(text, pos)
+        if not match:
+            break
+        val_start = match.end()
+        while val_start < n and text[val_start].isspace():
+            val_start += 1
+        val, end_pos = decoder.raw_decode(text, val_start)
+        assigns[match.group(1)] = val
+        ordered.append(val)
+        pos = end_pos
+
+    return assigns, ordered
+
+
+def _append_trailing_duration(lines, recorded_sec, target_dur):
+    """Preserve explicit v1/v2 header duration by padding trailing wait time."""
+    if target_dur is None:
+        return
+    rem = float(target_dur) - recorded_sec
+    if rem > 1e-6:
+        lines.append(_dump_json([_round_sec(rem), "o", ""]))
+
+
+def _upgrade_v1(obj, args):
+    env = obj.get("env") if isinstance(obj.get("env"), dict) else None
+    term_type = env.get("TERM") if env else None
+    hdr = _build_v3_header(
+        cols=obj.get("width") or 80,
+        rows=obj.get("height") or 24,
+        term_type=term_type,
+        theme=obj.get("theme"),
+        timestamp=obj.get("timestamp"),
+        idle_time_limit=obj.get("idle_time_limit"),
+        command=obj.get("command"),
+        title=obj.get("title"),
+        env=env,
+    )
+    _apply_header_overrides(hdr, args)
+
+    lines = [_dump_json(hdr)]
+    total_sec = 0.0
+    for item in obj.get("stdout", []):
+        if not isinstance(item, list) or len(item) < 2:
+            continue
+        dt_sec = _round_sec(item[0])
+        total_sec += dt_sec
+        lines.append(_dump_json([dt_sec, "o", str(item[1])]))
+    _append_trailing_duration(lines, total_sec, obj.get("duration"))
+    return "\n".join(lines) + "\n"
+
+
+def _upgrade_tre(events, term_info, args):
+    ti = term_info if isinstance(term_info, dict) else {}
+    hdr = _build_v3_header(
+        cols=ti.get("cols") or ti.get("width") or 80,
+        rows=ti.get("rows") or ti.get("height") or 24,
+    )
+    _apply_header_overrides(hdr, args)
+
+    lines = [_dump_json(hdr)]
+    prev_ms = 0.0
+    for ev in events:
+        if not isinstance(ev, dict):
+            continue
+        cur_ms = float(ev.get("s", prev_ms))
+        dt_sec = _round_sec(max(cur_ms - prev_ms, 0.0) / 1000.0)
+        prev_ms = cur_ms
+        lines.append(_dump_json([dt_sec, "o", str(ev.get("e", ""))]))
+    return "\n".join(lines) + "\n"
+
+
+def _upgrade_ndjson(raw_lines, args):
+    hdr_raw = None
+    event_rows = []
+    comments_before_hdr = []
+
+    for line in raw_lines:
+        stripped = line.strip()
+        if not stripped:
+            continue
+        if stripped.startswith("#"):
+            if hdr_raw is None:
+                comments_before_hdr.append(stripped)
+            else:
+                event_rows.append(("comment", stripped))
+            continue
+
+        parsed = json.loads(stripped)
+        if hdr_raw is None:
+            if not isinstance(parsed, dict):
+                raise ValueError("Expected JSON object header on first record line")
+            hdr_raw = parsed
+        else:
+            if not isinstance(parsed, list) or len(parsed) < 3:
+                raise ValueError(f"Expected 3-element event array, got: {stripped!r}")
+            event_rows.append(("event", parsed))
+
+    if hdr_raw is None:
+        raise ValueError("Empty recording: missing header")
+
+    ver = hdr_raw.get("version")
+    if ver == 3:
+        hdr = dict(hdr_raw)
+        _apply_header_overrides(hdr, args)
+        out = comments_before_hdr + [_dump_json(hdr)]
+        for kind, val in event_rows:
+            if kind == "comment":
+                out.append(val)
+            else:
+                ev = [_round_sec(val[0]), val[1], val[2]] + val[3:]
+                out.append(_dump_json(ev))
+        return "\n".join(out) + "\n"
+
+    if ver != 2:
+        raise ValueError(f"Unsupported NDJSON asciicast version: {ver!r}")
+
+    env = hdr_raw.get("env") if isinstance(hdr_raw.get("env"), dict) else None
+    term_type = env.get("TERM") if env else None
+    hdr = _build_v3_header(
+        cols=hdr_raw.get("width") or 80,
+        rows=hdr_raw.get("height") or 24,
+        term_type=term_type,
+        theme=hdr_raw.get("theme"),
+        timestamp=hdr_raw.get("timestamp"),
+        idle_time_limit=hdr_raw.get("idle_time_limit"),
+        command=hdr_raw.get("command"),
+        title=hdr_raw.get("title"),
+        env=env,
+    )
+    _apply_header_overrides(hdr, args)
+
+    out = comments_before_hdr + [_dump_json(hdr)]
+    prev_sec = 0.0
+    for kind, val in event_rows:
+        if kind == "comment":
+            out.append(val)
+            continue
+        cur_sec = float(val[0])
+        dt_sec = _round_sec(max(cur_sec - prev_sec, 0.0))
+        prev_sec = cur_sec
+        ev = [dt_sec, val[1], val[2]] + val[3:]
+        out.append(_dump_json(ev))
+    _append_trailing_duration(out, prev_sec, hdr_raw.get("duration"))
+    return "\n".join(out) + "\n"
+
+
+def _load_term_info_file(path):
+    text = open(path, "r", encoding="utf-8").read()
+    try:
+        val = json.loads(text)
+    except json.JSONDecodeError:
+        assigns, ordered = _extract_js_assignments(text)
+        val = assigns.get("_ti")
+        if val is None and ordered:
+            val = ordered[0]
+    if not isinstance(val, dict):
+        raise ValueError(f"Term info file does not contain a JSON object: {path}")
+    return val
+
+
+def upgrade_text(text, args):
+    ext_ti = _load_term_info_file(args.term_info) if args.term_info else None
+
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError:
+        parsed = None
+
+    if isinstance(parsed, dict) and (parsed.get("version") == 1 or "stdout" in parsed):
+        return _upgrade_v1(parsed, args)
+    if isinstance(parsed, list):
+        return _upgrade_tre(parsed, ext_ti, args)
+
+    lines = text.splitlines()
+    try:
+        return _upgrade_ndjson(lines, args)
+    except (json.JSONDecodeError, ValueError):
+        pass
+
+    try:
+        assigns, ordered = _extract_js_assignments(text)
+    except json.JSONDecodeError:
+        assigns, ordered = {}, []
+
+    if isinstance(assigns.get("_tre"), list):
+        ti = ext_ti or assigns.get("_ti")
+        return _upgrade_tre(assigns["_tre"], ti, args)
+
+    for candidate in ordered:
+        if isinstance(candidate, dict) and (
+            candidate.get("version") == 1 or "stdout" in candidate
+        ):
+            return _upgrade_v1(candidate, args)
+        if isinstance(candidate, list):
+            return _upgrade_tre(candidate, ext_ti, args)
+
+    raise ValueError("Unrecognized recording format (expected v1, v2, v3, or _tre/_ti)")
+
+
+def _write_atomic(path, content):
+    abs_path = os.path.abspath(path)
+    parent = os.path.dirname(abs_path)
+    mode = None
+    if os.path.exists(abs_path):
+        mode = stat.S_IMODE(os.stat(abs_path).st_mode)
+
+    fd, tmp_path = tempfile.mkstemp(prefix=".castty-upgrade.", dir=parent)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fp:
+            fp.write(content)
+        if mode is not None:
+            os.chmod(tmp_path, mode)
+        os.replace(tmp_path, abs_path)
+    except Exception:
+        if os.path.exists(tmp_path):
+            os.unlink(tmp_path)
+        raise
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(
+        description="Upgrade legacy CasTTY (_tre/_ti) or asciicast v1/v2 files to asciicast v3."
+    )
+    parser.add_argument(
+        "input",
+        nargs="?",
+        default="-",
+        help="Input recording path (or '-' for stdin)",
+    )
+    out_group = parser.add_mutually_exclusive_group()
+    out_group.add_argument("-o", "--output", help="Write upgraded v3 cast to file")
+    out_group.add_argument(
+        "-i",
+        "--in-place",
+        action="store_true",
+        help="Overwrite the input file in place",
+    )
+    parser.add_argument("--cols", type=int, help="Override initial terminal columns")
+    parser.add_argument("--rows", type=int, help="Override initial terminal rows")
+    parser.add_argument("--term", help="Override header term.type (e.g. xterm-256color)")
+    parser.add_argument("--title", help="Override recording title")
+    parser.add_argument(
+        "--term-info",
+        help="Path to a legacy CasTTY _ti JSON/JS file containing cols/rows",
+    )
+
+    args = parser.parse_args(argv)
+    if args.in_place and args.input == "-":
+        parser.error("--in-place requires a file path, not stdin")
+
+    try:
+        if args.input == "-":
+            raw = sys.stdin.read()
+        else:
+            with open(args.input, "r", encoding="utf-8") as fp:
+                raw = fp.read()
+
+        upgraded = upgrade_text(raw, args)
+
+        if args.in_place:
+            _write_atomic(args.input, upgraded)
+        elif args.output:
+            _write_atomic(args.output, upgraded)
+        else:
+            sys.stdout.write(upgraded)
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        print(f"castty-upgrade: {exc}", file=sys.stderr)
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
