@@ -95,17 +95,6 @@ def run_in_pty(args, send_seq=None, timeout=8.0, cwd=None, rows=40, cols=120,
     return proc.returncode, time.monotonic() - start, b"".join(out_chunks), stderr_data
 
 
-def castty_has_lame():
-    res = subprocess.run(
-        [CASTTY, "record", "-h"],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-    )
-    help_text = res.stdout + res.stderr
-    return "-m " in help_text
-
-
 def ffmpeg_fmt_from_soundio(fmt_desc):
     mapping = {
         "float 32-bit LE": "f32le",
@@ -189,7 +178,6 @@ def pipewire_loopback_available():
     return pactl.returncode == 0
 
 
-HAS_LAME = castty_has_lame()
 HAS_FFMPEG = bool(shutil.which("ffmpeg") and shutil.which("ffprobe"))
 HAS_LOOPBACK = pipewire_loopback_available()
 
@@ -434,7 +422,7 @@ class TestRecordingAndFormats(unittest.TestCase):
             self.assertGreaterEqual(d1e["duration"], 0.4)
 
 
-@unittest.skipUnless(HAS_LAME and HAS_FFMPEG, "requires WITH_LAME and ffmpeg/ffprobe")
+@unittest.skipUnless(HAS_FFMPEG, "requires ffmpeg/ffprobe")
 class TestLameDecoderVolumes(unittest.TestCase):
     def test_all_soundio_formats_decode_audible_tone(self):
         with tempfile.TemporaryDirectory(prefix="castty_lame_fmts_") as d:
@@ -535,7 +523,6 @@ class TestAudioLoopback(unittest.TestCase):
         self.assertAlmostEqual(mean_db, self.ref_mean, delta=2.0)
         self.assertAlmostEqual(max_db, self.ref_max, delta=2.0)
 
-    @unittest.skipUnless(HAS_LAME, "requires WITH_LAME")
     def test_stereo_mp3_capture(self):
         out_mp3 = os.path.join(self.tmpdir.name, "stereo.mp3")
         cast_path = os.path.join(self.tmpdir.name, "stereo_mp3.cast")
@@ -560,7 +547,6 @@ class TestAudioLoopback(unittest.TestCase):
         self.assertAlmostEqual(mean_db, self.ref_mean, delta=2.0)
         self.assertAlmostEqual(max_db, self.ref_max, delta=2.0)
 
-    @unittest.skipUnless(HAS_LAME, "requires WITH_LAME")
     def test_mono_mp3_capture(self):
         out_mp3 = os.path.join(self.tmpdir.name, "mono.mp3")
         cast_path = os.path.join(self.tmpdir.name, "mono_mp3.cast")
@@ -585,7 +571,6 @@ class TestAudioLoopback(unittest.TestCase):
         self.assertAlmostEqual(mean_db, self.ref_mean, delta=2.0)
         self.assertAlmostEqual(max_db, self.ref_max, delta=2.0)
 
-    @unittest.skipUnless(HAS_LAME, "requires WITH_LAME")
     def test_mute_silences_audio(self):
         out_mp3 = os.path.join(self.tmpdir.name, "muted.mp3")
         cast_path = os.path.join(self.tmpdir.name, "muted.cast")
@@ -607,7 +592,6 @@ class TestAudioLoopback(unittest.TestCase):
         _, max_db = probe_volume(["-ss", "0.3", "-i", out_mp3])
         self.assertLess(max_db, -40.0)
 
-    @unittest.skipUnless(HAS_LAME, "requires WITH_LAME")
     def test_pause_resume_and_mute_controls(self):
         out_mp3 = os.path.join(self.tmpdir.name, "ctrl.mp3")
         cast_path = os.path.join(self.tmpdir.name, "ctrl_audio.cast")
@@ -698,7 +682,6 @@ class TestAudioLoopback(unittest.TestCase):
         )
         self.assertLess(max_jump, 0.08, msg=f"Pop/step jump detected at raw splice: {max_jump}")
 
-    @unittest.skipUnless(HAS_LAME, "requires WITH_LAME")
     def test_append_mp3_validation_and_stereo_plus_mono_splice(self):
         # Invalid/non-MP3 file must fail cleanly without altering cast or audio.
         bad_mp3 = os.path.join(self.tmpdir.name, "not_mp3.mp3")
@@ -772,6 +755,115 @@ class TestAudioLoopback(unittest.TestCase):
 
         max_jump = self._max_step_around(["-i", out_mp3], dur1)
         self.assertLess(max_jump, 0.08, msg=f"Pop/step jump detected at MP3 splice: {max_jump}")
+
+    def test_sndfile_formats_capture(self):
+        # Verify unsupported -F fails cleanly.
+        rc, _, _, err = run_in_pty([
+            "record", "-N", "-F", "notasoundfmt",
+            os.path.join(self.tmpdir.name, "badfmt.cast"),
+        ])
+        self.assertNotEqual(rc, 0)
+        self.assertIn("unsupported audio format", err)
+
+        cases = [
+            ("wav", "pcm_s16le", None, []),
+            ("flac", "flac", None, []),
+            ("opus", "opus", "48000", []),
+            ("ogg", "vorbis", None, []),
+            ("m4a", "aac", None, []),
+            # Explicit -F overrides filename extension cleanly.
+            ("bin", "opus", "48000", ["-F", "opus"]),
+            ("raw", "aac", None, ["-F", "m4a"]),
+        ]
+        for idx, (ext, exp_codec, exp_rate, extra_flags) in enumerate(cases):
+            out_audio = os.path.join(self.tmpdir.name, f"cap_{idx}.{ext}")
+            cast_path = os.path.join(self.tmpdir.name, f"cap_{idx}.cast")
+            play = subprocess.Popen(["paplay", "-d", "castty_t_lsink_st", self.tone_wav])
+            try:
+                time.sleep(0.2)
+                rc, _, _, err = run_in_pty([
+                    "record", "-N", *extra_flags, "-d", self.st_dev,
+                    "-a", out_audio,
+                    "-e", "sh -c 'echo start; sleep 1.1; echo end'",
+                    cast_path,
+                ])
+            finally:
+                play.wait()
+            self.assertEqual(rc, 0, msg=f"{ext}: {err}")
+            info = ffprobe_stream(out_audio)
+            self.assertEqual(info.get("codec_name"), exp_codec, msg=f"{ext}: {info}")
+            if exp_rate is not None:
+                self.assertEqual(info.get("sample_rate"), exp_rate, msg=f"{ext}: {info}")
+            mean_db, _ = probe_volume(["-i", out_audio])
+            self.assertAlmostEqual(mean_db, self.ref_mean, delta=2.5, msg=ext)
+
+    def test_append_wav_opus_and_m4a_splice(self):
+        bad_wav = os.path.join(self.tmpdir.name, "not_wav.wav")
+        bad_cast = os.path.join(self.tmpdir.name, "not_wav.cast")
+        with open(bad_wav, "wb") as f:
+            f.write(b"not really a wav file\n")
+        rc, _, _, err = run_in_pty([
+            "record", "-N", "-A", "-d", self.st_dev, "-a", bad_wav, bad_cast,
+        ])
+        self.assertNotEqual(rc, 0)
+        self.assertIn("not a valid wav", err)
+
+        bad_m4a = os.path.join(self.tmpdir.name, "not_m4a.m4a")
+        with open(bad_m4a, "wb") as f:
+            f.write(b"not really an m4a file\n")
+        rc, _, _, err = run_in_pty([
+            "record", "-N", "-A", "-d", self.st_dev, "-a", bad_m4a, bad_cast,
+        ])
+        self.assertNotEqual(rc, 0)
+        self.assertIn("not a valid m4a", err)
+
+        for ext, exp_codec in [("wav", "pcm_s16le"), ("opus", "opus"), ("m4a", "aac")]:
+            out_audio = os.path.join(self.tmpdir.name, f"append_{ext}.{ext}")
+            cast_path = os.path.join(self.tmpdir.name, f"append_{ext}.cast")
+
+            play = subprocess.Popen(["paplay", "-d", "castty_t_lsink_st", self.tone_wav])
+            try:
+                time.sleep(0.2)
+                rc, _, _, err = run_in_pty([
+                    "record", "-N", "-d", self.st_dev, "-a", out_audio,
+                    "-e", "sh -c 'echo s1; sleep 1.1'", cast_path,
+                ])
+            finally:
+                play.wait()
+            self.assertEqual(rc, 0, msg=f"{ext} s1: {err}")
+            self.assertEqual(err, "", msg=f"{ext} s1 stderr: {err}")
+            dur1 = float(ffprobe_stream(out_audio)["duration"])
+
+            # Append with MONO source onto STEREO file across formats.
+            play = subprocess.Popen(["paplay", "-d", "castty_t_lsink_mo", self.tone_wav])
+            try:
+                time.sleep(0.2)
+                rc, _, _, err = run_in_pty([
+                    "record", "-N", "-A", "-d", self.mo_dev, "-a", out_audio,
+                    "-e", "sh -c 'echo s2; sleep 1.2'", cast_path,
+                ])
+            finally:
+                play.wait()
+            self.assertEqual(rc, 0, msg=f"{ext} s2: {err}")
+            self.assertEqual(err, "", msg=f"{ext} s2 stderr: {err}")
+            info2 = ffprobe_stream(out_audio)
+            self.assertEqual(info2.get("codec_name"), exp_codec)
+            self.assertEqual(info2.get("channels"), 2)
+            dur2 = float(info2["duration"])
+            self.assertGreater(dur2, dur1 + 0.9)
+
+            with open(cast_path, "r", encoding="utf-8") as f:
+                lines = [json.loads(l) for l in f]
+            cast_dur = sum(max(ev[0], 0.0) for ev in lines[1:])
+            self.assertAlmostEqual(cast_dur, dur2, delta=0.25, msg=ext)
+
+            mean1, _ = probe_volume(["-t", f"{max(dur1 - 0.15, 0.5):.3f}", "-i", out_audio])
+            mean2, _ = probe_volume(["-ss", f"{dur1 + 0.25:.3f}", "-t", "0.8", "-i", out_audio])
+            self.assertAlmostEqual(mean1, self.ref_mean, delta=2.5, msg=ext)
+            self.assertAlmostEqual(mean2, self.ref_mean, delta=2.5, msg=ext)
+
+            max_jump = self._max_step_around(["-i", out_audio], dur1)
+            self.assertLess(max_jump, 0.08, msg=f"Pop/step jump in {ext}: {max_jump}")
 
 
 if __name__ == "__main__":

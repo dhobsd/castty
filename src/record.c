@@ -151,7 +151,7 @@ static void
 usage(int status)
 {
 
-	fprintf(stderr, "usage: castty record [-123AacDdehlN" LAME_OPT "prt] [out.cast]\n"
+	fprintf(stderr, "usage: castty record [-123AacDdFehlmNprtR] [out.cast]\n"
 	    " -1             Output asciicast v1 format.\n"
 	    " -2             Output asciicast v2 format.\n"
 	    " -3             Output asciicast v3 format (default).\n"
@@ -161,11 +161,10 @@ usage(int status)
 	    " -D <outfile>   Send debugging information into <outfile>.\n"
 	    " -d <device>    Use audio device <device> for input.\n"
 	    " -e <cmd>       Execute <cmd> from the recorded shell session.\n"
+	    " -F <format>    Audio output format: raw, mp3, wav, flac, opus, ogg, m4a.\n"
 	    " -h             Show this help.\n"
 	    " -l             List available audio input devices and exit.\n"
-#ifdef WITH_LAME
-	    " -m             Encode audio to mp3 before writing.\n"
-#endif
+	    " -m             Encode audio to mp3 before writing (shorthand for -F mp3).\n"
 	    " -N             Disable terminal color/version probing.\n"
 	    " -p             Begin the recording in paused mode.\n"
 	    " -r <rows>      Use <rows> rows in the recorded shell session.\n"
@@ -198,7 +197,7 @@ record_main(int argc, char **argv)
 	exec_cmd = NULL;
 	no_probe = 0;
 
-	while ((ch = getopt(argc, argv, "?Aa:c:D:d:e:hlNpr:Rt:123" LAME_OPT)) != EOF) {
+	while ((ch = getopt(argc, argv, "?Aa:c:D:d:e:F:hlmNpr:Rt:123")) != EOF) {
 		char *e;
 
 		switch (ch) {
@@ -226,6 +225,14 @@ record_main(int argc, char **argv)
 		case 'e':
 			exec_cmd = strdup(optarg);
 			oa.cmd = json_escape(exec_cmd);
+			break;
+		case 'F':
+			if (audio_set_format(optarg) != 0) {
+				fprintf(stderr,
+				    "castty: unsupported audio format: %s\n",
+				    optarg);
+				usage(EXIT_FAILURE);
+			}
 			break;
 		case 'l':
 			audio_list_inputs();
