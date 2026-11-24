@@ -783,6 +783,37 @@ test_hud_layout_and_compositor(void)
 	read_pipe_avail(pfd[0], out, sizeof out, &nread);
 	assert(strstr(out, "MUTE") != NULL);
 
+	/* Named chapter prompt renders non-destructively and restores child row */
+	tui_vterm_feed(tv, "\r\n\x1b[14;1HBOTTOM_CHILD", 21, -1);
+	(void)tui_vterm_take_dirty(tv);
+	hud_set_prompt(&st, 1, "Intro Setup");
+	tui_surface_begin(sf);
+	tui_vterm_blit(tv, sf, 0, 0);
+	hud_render(&st, &lay, sf);
+	tui_surface_flush(sf, 0, 0, 1, 0);
+	read_pipe_avail(pfd[0], out, sizeof out, &nread);
+	assert(strstr(out, "Chapter: Intro Setup_") != NULL);
+
+	hud_set_prompt(&st, 0, NULL);
+	hud_note_marker_label(&st, 2600.0, "Intro Setup");
+	tui_surface_begin(sf);
+	tui_vterm_blit(tv, sf, 0, 0);
+	hud_render(&st, &lay, sf);
+	tui_surface_flush(sf, 0, 0, 1, 0);
+	read_pipe_avail(pfd[0], out, sizeof out, &nread);
+	assert(strstr(out, "BOTTOM_CHILD") != NULL);
+
+	/* Bottom HUD displays named marker flash */
+	tui_surface_resize(sf, 24, 80);
+	hud_compute_layout(HUD_BOTTOM, 24, 80, 0, 0, 0, &lay);
+	tui_surface_invalidate(sf);
+	tui_surface_begin(sf);
+	tui_vterm_blit(tv, sf, 0, 0);
+	hud_render(&st, &lay, sf);
+	tui_surface_flush(sf, 0, 0, 1, 0);
+	read_pipe_avail(pfd[0], out, sizeof out, &nread);
+	assert(strstr(out, "MK:02(Intro Setup)") != NULL);
+
 	tui_vterm_destroy(tv);
 	tui_surface_destroy(sf);
 	close(pfd[0]);

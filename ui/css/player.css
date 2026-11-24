@@ -86,6 +86,11 @@ body {
 	outline-offset: -2px;
 }
 
+#controls button[aria-expanded="true"] {
+	background: rgba(255, 255, 255, 0.18);
+	color: var(--castty-accent);
+}
+
 #controls .material-icons {
 	font-size: 20px;
 	line-height: 1;
@@ -174,6 +179,164 @@ input[type="range"]:focus-visible + .rangeslider--horizontal {
 	bottom: -15px;
 	left: 0;
 	right: 0;
+}
+
+/* Chapter marker ticks and hover preview tooltip on scrubber bar */
+.castty-marker-layer {
+	position: absolute;
+	inset: 0;
+	pointer-events: none;
+	z-index: 2;
+}
+
+.castty-marker-tick {
+	position: absolute;
+	top: -2px;
+	bottom: -2px;
+	width: 2px;
+	margin-left: -1px;
+	border-radius: 1px;
+	background: #ffd54f;
+	box-shadow: 0 0 0 1px rgba(20, 20, 20, 0.85);
+	transition: transform 100ms ease, background-color 100ms ease;
+}
+
+.castty-marker-tick.is-hovered {
+	background: #fff;
+	transform: scaleY(1.45);
+}
+
+.castty-scrub-tooltip {
+	position: absolute;
+	bottom: calc(100% + 10px);
+	left: 0;
+	transform: translateX(-50%);
+	background: rgba(20, 20, 20, 0.96);
+	color: var(--castty-bar-fg);
+	border: 1px solid rgba(255, 255, 255, 0.18);
+	border-radius: 4px;
+	padding: 3px 7px;
+	font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+	font-size: 11px;
+	line-height: 1.3;
+	white-space: nowrap;
+	max-width: 240px;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	pointer-events: none;
+	opacity: 0;
+	z-index: 10;
+	box-shadow: 0 2px 8px rgba(0, 0, 0, 0.45);
+	transition: opacity 100ms ease;
+}
+
+.castty-scrub-tooltip.is-visible {
+	opacity: 1;
+}
+
+/* Chapters popup menu */
+.castty-chapters-popover {
+	background: rgba(24, 24, 24, 0.98);
+	color: var(--castty-bar-fg);
+	border: 1px solid rgba(255, 255, 255, 0.18);
+	border-radius: 6px;
+	padding: 4px;
+	min-width: 200px;
+	max-width: min(320px, calc(100vw - 16px));
+	max-height: min(260px, calc(100vh - 64px));
+	overflow-y: auto;
+	box-shadow: 0 6px 20px rgba(0, 0, 0, 0.55);
+	box-sizing: border-box;
+	z-index: 10000;
+}
+
+.castty-chapters-popover:not([popover]) {
+	display: none;
+	position: fixed;
+	inset: auto;
+	margin: 0;
+}
+
+.castty-chapters-popover:not([popover]).is-open {
+	display: block;
+}
+
+@supports (position-area: block-start) {
+	.castty-chapters-popover[popover] {
+		inset: auto;
+		margin: 0 0 6px 8px;
+		position-area: block-start span-inline-start;
+		position-try-fallbacks: flip-block, flip-inline, flip-block flip-inline;
+	}
+}
+
+@supports not (position-area: block-start) {
+	.castty-chapters-popover[popover] {
+		position: fixed;
+		inset: auto;
+		margin: 0;
+	}
+}
+
+#controls .castty-chapters-menu {
+	--menu-icon-size: 1.1rem;
+	display: flex;
+	flex-direction: column;
+	gap: 1px;
+}
+
+#controls .castty-chapters-menu button[role="menuitemradio"] {
+	width: 100%;
+	height: auto;
+	min-height: 32px;
+	padding: 6px 8px;
+	border-radius: 4px;
+	font-family: system-ui, -apple-system, sans-serif;
+	font-size: 12.5px;
+	line-height: 1.25;
+	text-align: left;
+	justify-content: flex-start;
+	gap: 6px;
+}
+
+#controls .castty-chapters-menu button[role="menuitemradio"]::before {
+	content: "";
+	flex: none;
+	inline-size: var(--menu-icon-size);
+	color: var(--castty-accent);
+	font-weight: 700;
+	text-align: center;
+}
+
+#controls .castty-chapters-menu button[role="menuitemradio"][aria-checked="true"]::before {
+	content: "\2713";
+}
+
+#controls .castty-chapters-menu button[role="menuitemradio"]:hover {
+	background: rgba(255, 255, 255, 0.12);
+}
+
+#controls .castty-chapters-menu button[role="menuitemradio"]:focus-visible {
+	background: rgba(255, 255, 255, 0.14);
+	outline: 2px solid var(--castty-accent);
+	outline-offset: -2px;
+}
+
+.castty-chapter-title {
+	flex: 1 1 auto;
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.castty-chapter-time.hint {
+	margin-inline-start: auto;
+	flex: 0 0 auto;
+	font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+	font-size: 11px;
+	font-variant-numeric: tabular-nums;
+	color: rgba(245, 245, 245, 0.7);
 }
 
 /* Keep read-only playback terminal from causing mobile scroll jumps or scrollbars */

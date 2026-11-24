@@ -136,12 +136,35 @@ hud_note_output(struct hud_state *st)
 }
 
 void
-hud_note_marker(struct hud_state *st, double at_ms)
+hud_note_marker_label(struct hud_state *st, double at_ms, const char *label)
 {
 	st->markers++;
 	st->last_marker_ms = at_ms;
 	st->cur_tl_flags |= HUD_TL_MARK;
 	st->mark_flash_ttl = 24;
+	if (label != NULL) {
+		snprintf(st->last_marker_label, sizeof st->last_marker_label,
+		    "%s", label);
+	} else {
+		st->last_marker_label[0] = '\0';
+	}
+}
+
+void
+hud_note_marker(struct hud_state *st, double at_ms)
+{
+	hud_note_marker_label(st, at_ms, NULL);
+}
+
+void
+hud_set_prompt(struct hud_state *st, int active, const char *text)
+{
+	st->prompt_active = active ? 1 : 0;
+	if (active && text != NULL) {
+		snprintf(st->prompt_buf, sizeof st->prompt_buf, "%s", text);
+	} else {
+		st->prompt_buf[0] = '\0';
+	}
 }
 
 void
@@ -560,8 +583,40 @@ render_side_hud(const struct hud_state *st, const struct hud_layout *lay,
 		fr++;
 		if (foot_rows >= 3) {
 			tui_surface_put_str(sf, fr, inner, iw, &dim_st,
-			    "^apmkh");
+			    "^apmKh");
 		}
+	}
+}
+
+static void
+render_prompt_bar(const struct hud_state *st, int row, int col, int width,
+    struct tui_surface *sf)
+{
+	struct tui_style bg_st = make_style(15, 0, 0, 0);
+	struct tui_style pr_st = make_style(14, 0, 1, 0);
+	struct tui_style dim_st = make_style(8, 0, 0, 0);
+	const char *hint = " (Enter save, Esc cancel) ";
+	int hint_len = (int)strlen(hint);
+	int pos = col;
+	char line[96];
+
+	if (row < 0 || width <= 0) {
+		return;
+	}
+	tui_surface_fill(sf, row, col, 1, width, ' ', &bg_st);
+	tui_surface_put_cp(sf, row, pos++, ' ', &pr_st);
+	if (pos < col + width) {
+		tui_surface_put_cp(sf, row, pos++, 0x25c6 /* ◆ */, &pr_st);
+	}
+	snprintf(line, sizeof line, " Chapter: %s_", st->prompt_buf);
+	int avail = width - (pos - col);
+	if (avail > hint_len + 16) {
+		tui_surface_put_str(sf, row, pos, avail - hint_len, &pr_st,
+		    line);
+		tui_surface_put_str(sf, row, col + width - hint_len, hint_len,
+		    &dim_st, hint);
+	} else if (avail > 0) {
+		tui_surface_put_str(sf, row, pos, avail, &pr_st, line);
 	}
 }
 
@@ -575,7 +630,12 @@ render_bottom_hud(const struct hud_state *st, const struct hud_layout *lay,
 	int pos = c;
 	struct tui_style bg_st = make_style(15, 0, 0, 0);
 	struct tui_style dim_st = make_style(8, 0, 0, 0);
-	char buf[64];
+	char buf[80];
+
+	if (st->prompt_active) {
+		render_prompt_bar(st, r, c, w, sf);
+		return;
+	}
 
 	tui_surface_fill(sf, r, c, 1, w, ' ', &bg_st);
 
@@ -634,12 +694,17 @@ render_bottom_hud(const struct hud_state *st, const struct hud_layout *lay,
 		struct tui_style mkst = make_style(st->mark_flash_ttl > 0 ?
 		    14 : 7, 0, st->mark_flash_ttl > 0, 0);
 
-		snprintf(buf, sizeof buf, "MK:%02d ", st->markers);
+		if (st->mark_flash_ttl > 0 && st->last_marker_label[0] != '\0') {
+			snprintf(buf, sizeof buf, "MK:%02d(%.16s) ",
+			    st->markers, st->last_marker_label);
+		} else {
+			snprintf(buf, sizeof buf, "MK:%02d ", st->markers);
+		}
 		tui_surface_put_str(sf, r, pos, w - (pos - c), &mkst, buf);
 		pos += (int)strlen(buf);
 	}
 
-	int tl_avail = (c + w) - pos - 14;
+	int tl_avail = (c + w) - pos - 16;
 	if (tl_avail >= 6) {
 		tui_surface_put_cp(sf, r, pos++, '[', &dim_st);
 		for (int i = 0; i < tl_avail - 2; i++) {
@@ -666,9 +731,12 @@ render_bottom_hud(const struct hud_state *st, const struct hud_layout *lay,
 		pos += 2;
 	}
 
-	if (pos + 11 <= c + w) {
+	if (pos + 14 <= c + w) {
+		tui_surface_put_str(sf, r, c + w - 14, 14, &dim_st,
+		    " ^a p/m/k/K/h ");
+	} else if (pos + 11 <= c + w) {
 		tui_surface_put_str(sf, r, c + w - 12, 12, &dim_st,
-		    " ^a p/m/k/h ");
+		    " ^a p/m/K/h ");
 	}
 }
 
@@ -678,7 +746,14 @@ hud_render(const struct hud_state *st, const struct hud_layout *lay,
 {
 	if (lay->active_mode == HUD_SIDE) {
 		render_side_hud(st, lay, sf);
+		if (st->prompt_active && lay->outer_rows > 0) {
+			render_prompt_bar(st, lay->outer_rows - 1, 0,
+			    lay->outer_cols, sf);
+		}
 	} else if (lay->active_mode == HUD_BOTTOM) {
 		render_bottom_hud(st, lay, sf);
+	} else if (st->prompt_active && lay->outer_rows > 0) {
+		render_prompt_bar(st, lay->outer_rows - 1, 0,
+		    lay->outer_cols, sf);
 	}
 }
