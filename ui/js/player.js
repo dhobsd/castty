@@ -871,7 +871,8 @@ var player = function(audioFile, containerElem, events, termInfoOrOpts, maybeOpt
 
 			Player.seekUpdate = 1;
 			if (audioFile) {
-				var curMs = Math.min(Player.audio.currentTime * 1000, Player.duration);
+				tryApplyPendingSeek();
+				var curMs = Math.min(getCurrentTimeMs(), getTimelineMaxMs() || Player.duration);
 				Player.seeker.val(curMs).change();
 				updateTimeDisplay(curMs);
 			} else {
@@ -944,14 +945,17 @@ var player = function(audioFile, containerElem, events, termInfoOrOpts, maybeOpt
 						setToggleIcon(ICON_PAUSE, 'Pause');
 					}
 
+					tryApplyPendingSeek();
 					var playPromise = Player.audio.play();
 					if (!Player.audio.paused && Player.audio.readyState >= 3) {
+						tryApplyPendingSeek();
 						startTimers();
 					}
 
 					if (playPromise && typeof playPromise.then === 'function') {
 						playPromise.then(function() {
 							if (!Player.paused) {
+								tryApplyPendingSeek();
 								setToggleIcon(ICON_PAUSE, 'Pause');
 								startTimers();
 							}
@@ -995,25 +999,42 @@ var player = function(audioFile, containerElem, events, termInfoOrOpts, maybeOpt
 		var scrubLastX = null;
 		var scrubMovedPx = 0;
 
+		var getCurrentTimeMs = function() {
+			if (audioFile && Player.audio) {
+				if (Player.pendingSeek !== null) {
+					return Player.pendingSeek * 1000;
+				}
+				return Player.audio.currentTime * 1000;
+			}
+			return Player.seekPos;
+		};
+
+		var tryApplyPendingSeek = function() {
+			if (!audioFile || !Player.audio || Player.pendingSeek === null ||
+			    Player.audio.readyState <= 0) {
+				return false;
+			}
+			var target = Player.pendingSeek;
+			try {
+				Player.audio.currentTime = target;
+				if (Math.abs(Player.audio.currentTime - target) <= 0.25) {
+					Player.pendingSeek = null;
+					return true;
+				}
+			} catch (e) {}
+			return false;
+		};
+
 		var commitSeek = function(val) {
 			val = Math.max(0, Math.min(val, Player.maxSeek || Player.duration || val));
 			var wasEnded = Player.ended;
 			stopTimers(false);
 			Player.rem = Player.seekTo(val);
+			Player.seekPos = val;
+			Player.baseSeekPos = val;
 			if (audioFile) {
-				if (Player.audio.readyState > 0) {
-					try {
-						Player.audio.currentTime = val / 1000;
-						Player.pendingSeek = null;
-					} catch (e) {
-						Player.pendingSeek = val / 1000;
-					}
-				} else {
-					Player.pendingSeek = val / 1000;
-				}
-			} else {
-				Player.seekPos = val;
-				Player.baseSeekPos = val;
+				Player.pendingSeek = val / 1000;
+				tryApplyPendingSeek();
 			}
 			updateTimeDisplay(val);
 			if (wasEnded && !Player.ended && Player.paused) {
@@ -1172,8 +1193,7 @@ var player = function(audioFile, containerElem, events, termInfoOrOpts, maybeOpt
 			if (!Player.chapters.length) {
 				return false;
 			}
-			var curMs = audioFile && Player.audio ?
-			    Player.audio.currentTime * 1000 : Player.seekPos;
+			var curMs = getCurrentTimeMs();
 			for (var i = 0; i < Player.chapters.length; i++) {
 				if (Player.chapters[i].timeMs > curMs + 50) {
 					return Player.seekToChapter(i);
@@ -1186,8 +1206,7 @@ var player = function(audioFile, containerElem, events, termInfoOrOpts, maybeOpt
 			if (!Player.chapters.length) {
 				return false;
 			}
-			var curMs = audioFile && Player.audio ?
-			    Player.audio.currentTime * 1000 : Player.seekPos;
+			var curMs = getCurrentTimeMs();
 			for (var i = Player.chapters.length - 1; i >= 0; i--) {
 				if (Player.chapters[i].timeMs < curMs - 250) {
 					return Player.seekToChapter(i);
@@ -1672,7 +1691,7 @@ var player = function(audioFile, containerElem, events, termInfoOrOpts, maybeOpt
 				Player.toggle.trigger('click');
 			} else if ((e.key === 'ArrowLeft' || e.key === 'j' || e.key === 'J') && tag !== 'input') {
 				e.preventDefault();
-				var curBack = audioFile ? Player.audio.currentTime * 1000 : Player.seekPos;
+				var curBack = getCurrentTimeMs();
 				var nextBack = Math.max(curBack - 5000, 0);
 				Player.seekUpdate = 1;
 				Player.seeker.val(nextBack).change();
@@ -1680,7 +1699,7 @@ var player = function(audioFile, containerElem, events, termInfoOrOpts, maybeOpt
 				commitSeek(nextBack);
 			} else if ((e.key === 'ArrowRight' || e.key === 'l' || e.key === 'L') && tag !== 'input') {
 				e.preventDefault();
-				var curFwd = audioFile ? Player.audio.currentTime * 1000 : Player.seekPos;
+				var curFwd = getCurrentTimeMs();
 				var nextFwd = Math.min(curFwd + 5000, Player.maxSeek || Player.duration);
 				Player.seekUpdate = 1;
 				Player.seeker.val(nextFwd).change();
@@ -1706,30 +1725,20 @@ var player = function(audioFile, containerElem, events, termInfoOrOpts, maybeOpt
 			Player.audio.preload = 'auto';
 			Player.audio.setAttribute('playsinline', '');
 
-			$(Player.audio).on('loadedmetadata durationchange', function() {
+			$(Player.audio).on('loadedmetadata durationchange progress canplay canplaythrough', function() {
 				if (isFinite(Player.audio.duration) && Player.audio.duration > 0) {
 					Player.maxSeek = Player.audio.duration * 1000;
-					updateTimeDisplay(Player.audio.currentTime * 1000);
+					updateTimeDisplay(getCurrentTimeMs());
 					if (Player.syncMarkerLayout) {
 						Player.syncMarkerLayout();
 					}
 				}
-				if (Player.pendingSeek !== null && Player.audio.readyState > 0) {
-					try {
-						Player.audio.currentTime = Player.pendingSeek;
-						Player.pendingSeek = null;
-					} catch (e) {}
-				}
+				tryApplyPendingSeek();
 			});
 
 			$(Player.audio).on('playing', function() {
 				if (!Player.paused) {
-					if (Player.pendingSeek !== null && Player.audio.readyState > 0) {
-						try {
-							Player.audio.currentTime = Player.pendingSeek;
-							Player.pendingSeek = null;
-						} catch (e) {}
-					}
+					tryApplyPendingSeek();
 					setToggleIcon(ICON_PAUSE, 'Pause');
 					startTimers();
 				}

@@ -993,6 +993,25 @@ test_cast_doc(void)
 	cast_doc_free(&reloaded);
 	cast_doc_free(&doc);
 
+	/* 5. Cross-event keystroke search (ANSI-stripped) and redaction */
+	cast_doc_init(&doc);
+	doc.version = 3;
+	const char *keys = "ls -lt tok999";
+	for (size_t k = 0; keys[k] != '\0'; k++) {
+		assert(cast_doc_insert_event(&doc, 100.0 + (double)k * 50.0,
+		    CAST_EV_OUT, &keys[k], 1, 80, 24) == 0);
+	}
+	assert(cast_doc_insert_event(&doc, 900.0, CAST_EV_OUT,
+	    "\x1b[01;34msrc_dir\x1b[0m\r\n", 17, 80, 24) == 0);
+	assert(cast_doc_find_text(&doc, "ls -lt", 0.0, 1, &idx) == 0);
+	assert(fabs(doc.events[idx].t_ms - 350.0) < 1e-3);
+	assert(cast_doc_find_text(&doc, "src_dir", 0.0, 1, &idx) == 0);
+	assert(fabs(doc.events[idx].t_ms - 900.0) < 1e-3);
+	assert(cast_doc_redact(&doc, "tok999", "******") == 1);
+	assert(cast_doc_find_text(&doc, "tok999", 0.0, 1, &idx) != 0);
+	assert(cast_doc_find_text(&doc, "******", 0.0, 1, &idx) == 0);
+	cast_doc_free(&doc);
+
 	unlink(tmpl1);
 	unlink(tmpl2);
 	unlink(tmpl3);

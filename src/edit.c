@@ -913,14 +913,24 @@ submit_prompt(struct edit_ctx *ed)
 		}
 		break;
 	}
-	case PROMPT_REDACT_NEEDLE:
+	case PROMPT_REDACT_NEEDLE: {
+		char mask[256];
+		size_t mlen;
+
 		if (*buf == '\0') {
 			set_status(ed, "Redact cancelled");
 			break;
 		}
 		snprintf(pr->redact_needle, sizeof pr->redact_needle, "%s", buf);
-		open_prompt(ed, PROMPT_REDACT_REPL, "****");
+		mlen = strlen(pr->redact_needle);
+		if (mlen >= sizeof mask) {
+			mlen = sizeof mask - 1;
+		}
+		memset(mask, '*', mlen);
+		mask[mlen] = '\0';
+		open_prompt(ed, PROMPT_REDACT_REPL, mask);
 		break;
+	}
 	case PROMPT_REDACT_REPL:
 		if (undo_save_current(ed, "redact") == 0) {
 			size_t n = cast_doc_redact(&ed->doc, pr->redact_needle,
@@ -1126,7 +1136,7 @@ render_help_overlay(struct tui_surface *sf, int vp_rows, int vp_cols)
 		"             During Dub: Space Freeze/Extend  . Step   ",
 		"                         Enter Commit   Esc Cancel     ",
 		" Undo/Save:  u / Ctrl-Z Undo   U / Ctrl-R Redo         ",
-		"             w Save atomically   q Quit (Q Force quit) ",
+		"             w Save   W Save audio as   q/Q Quit       ",
 	};
 	int nlines = (int)(sizeof lines / sizeof lines[0]);
 	int w = 56;
@@ -1374,6 +1384,9 @@ handle_key(struct edit_ctx *ed, int key)
 			if (pr->len > 0) {
 				pr->buf[--pr->len] = '\0';
 			}
+		} else if (key == 0x15) {
+			pr->len = 0;
+			pr->buf[0] = '\0';
 		} else if (key >= 0x20 && key < 0x7f) {
 			if (pr->kind == PROMPT_QUIT_CONFIRM) {
 				pr->buf[0] = (char)key;
@@ -1663,6 +1676,9 @@ handle_key(struct edit_ctx *ed, int key)
 		break;
 	case 'w':
 		do_save(ed, NULL);
+		break;
+	case 'W':
+		open_prompt(ed, PROMPT_SAVE_AUDIO, ed->audio_path);
 		break;
 	default:
 		break;

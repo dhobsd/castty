@@ -1047,10 +1047,122 @@ cast_doc_remove_event(struct cast_doc *doc, size_t ev_idx)
 	return 0;
 }
 
+static size_t
+redact_stream_type(struct cast_doc *doc, enum cast_ev_type stype,
+    const char *needle, size_t nlen, const char *repl, size_t rlen)
+{
+	size_t total = 0, off = 0, pos = 0, count = 0;
+	char *flat = NULL, *repl_ch = NULL;
+	uint8_t *act = NULL;
+
+	for (size_t i = 0; i < doc->nevents; i++) {
+		if (doc->events[i].type == stype) {
+			total += doc->events[i].len;
+		}
+	}
+	if (total < nlen) {
+		return 0;
+	}
+	flat = malloc(total);
+	act = calloc(total, 1);
+	repl_ch = calloc(total, 1);
+	if (flat == NULL || act == NULL || repl_ch == NULL) {
+		free(flat);
+		free(act);
+		free(repl_ch);
+		return 0;
+	}
+
+	for (size_t i = 0; i < doc->nevents; i++) {
+		if (doc->events[i].type == stype && doc->events[i].len > 0) {
+			memcpy(flat + off, doc->events[i].data,
+			    doc->events[i].len);
+			off += doc->events[i].len;
+		}
+	}
+
+	while (pos + nlen <= total) {
+		if (memcmp(flat + pos, needle, nlen) == 0) {
+			for (size_t j = 0; j < nlen; j++) {
+				if (j + 1 < nlen) {
+					if (j < rlen) {
+						act[pos + j] = 1;
+						repl_ch[pos + j] = repl[j];
+					} else {
+						act[pos + j] = 3;
+					}
+				} else if (j < rlen) {
+					act[pos + j] = 2;
+				} else {
+					act[pos + j] = 3;
+				}
+			}
+			pos += nlen;
+			count++;
+		} else {
+			pos++;
+		}
+	}
+
+	if (count > 0) {
+		off = 0;
+		for (size_t i = 0; i < doc->nevents; i++) {
+			struct cast_event *ev = &doc->events[i];
+			int modified = 0;
+
+			if (ev->type != stype) {
+				continue;
+			}
+			for (size_t k = 0; k < ev->len; k++) {
+				if (act[off + k] != 0) {
+					modified = 1;
+					break;
+				}
+			}
+			if (modified) {
+				struct dynbuf b = { 0 };
+				int err = 0;
+
+				for (size_t k = 0; k < ev->len; k++) {
+					uint8_t a = act[off + k];
+
+					if (a == 0) {
+						err |= dbuf_push_byte(&b,
+						    (unsigned char)ev->data[k]);
+					} else if (a == 1) {
+						err |= dbuf_push_byte(&b,
+						    (unsigned char)repl_ch[off + k]);
+					} else if (a == 2) {
+						size_t rem = rlen - (nlen - 1);
+
+						err |= dbuf_push_bytes(&b,
+						    repl + (nlen - 1), rem);
+					}
+				}
+				if (!err && dbuf_reserve(&b, 1) == 0) {
+					b.data[b.len] = '\0';
+					free(ev->data);
+					ev->data = b.data;
+					ev->len = b.len;
+					doc->dirty = 1;
+				} else {
+					free(b.data);
+				}
+			}
+			off += ev->len;
+		}
+	}
+
+	free(flat);
+	free(act);
+	free(repl_ch);
+	return count;
+}
+
 size_t
 cast_doc_redact(struct cast_doc *doc, const char *needle, const char *repl)
 {
-	size_t nlen, rlen, count = 0;
+	size_t nlen, rlen;
 
 	if (needle == NULL || *needle == '\0') {
 		return 0;
@@ -1058,55 +1170,10 @@ cast_doc_redact(struct cast_doc *doc, const char *needle, const char *repl)
 	nlen = strlen(needle);
 	rlen = repl ? strlen(repl) : 0;
 
-	for (size_t i = 0; i < doc->nevents; i++) {
-		struct cast_event *ev = &doc->events[i];
-		struct dynbuf b = { 0 };
-		size_t pos = 0;
-		int modified = 0;
-
-		if ((ev->type != CAST_EV_OUT && ev->type != CAST_EV_IN) ||
-		    ev->len < nlen) {
-			continue;
-		}
-		while (pos + nlen <= ev->len) {
-			if (memcmp(ev->data + pos, needle, nlen) == 0) {
-				if (dbuf_push_bytes(&b, repl ? repl : "",
-				    rlen) != 0) {
-					free(b.data);
-					return count;
-				}
-				pos += nlen;
-				count++;
-				modified = 1;
-			} else {
-				if (dbuf_push_byte(&b,
-				    (unsigned char)ev->data[pos]) != 0) {
-					free(b.data);
-					return count;
-				}
-				pos++;
-			}
-		}
-		if (modified) {
-			if (pos < ev->len && dbuf_push_bytes(&b,
-			    ev->data + pos, ev->len - pos) != 0) {
-				free(b.data);
-				return count;
-			}
-			if (dbuf_reserve(&b, 1) != 0) {
-				free(b.data);
-				return count;
-			}
-			b.data[b.len] = '\0';
-			free(ev->data);
-			ev->data = b.data;
-			ev->len = b.len;
-			doc->dirty = 1;
-		} else {
-			free(b.data);
-		}
-	}
-	return count;
+	return redact_stream_type(doc, CAST_EV_OUT, needle, nlen,
+	    repl ? repl : "", rlen) +
+	    redact_stream_type(doc, CAST_EV_IN, needle, nlen,
+	    repl ? repl : "", rlen);
 }
 
 void
@@ -1193,43 +1260,136 @@ int
 cast_doc_find_text(const struct cast_doc *doc, const char *needle,
     double from_ms, int dir, size_t *idx_out)
 {
-	size_t nlen;
+	size_t nlen, raw_total = 0, vis_len = 0;
+	char *vis = NULL;
+	size_t *vis_ev = NULL;
+	int strip_ansi, found = 0;
+	size_t best_idx = 0;
+	enum { ESC_NONE = 0, ESC_SEEN, ESC_CSI, ESC_OSC, ESC_OSC_ESC } st =
+	    ESC_NONE;
 
 	if (needle == NULL || *needle == '\0') {
 		return -1;
 	}
 	nlen = strlen(needle);
-	if (dir >= 0) {
-		for (size_t i = 0; i < doc->nevents; i++) {
-			const struct cast_event *ev = &doc->events[i];
+	strip_ansi = (memchr(needle, 0x1b, nlen) == NULL);
 
-			if (ev->t_ms > from_ms + 1.0 &&
-			    (ev->type == CAST_EV_OUT ||
-			     ev->type == CAST_EV_MARKER) &&
-			    ev->len >= nlen &&
-			    find_submem(ev->data, ev->len, needle, nlen) != NULL) {
-				if (idx_out != NULL) {
-					*idx_out = i;
-				}
-				return 0;
+	for (size_t i = 0; i < doc->nevents; i++) {
+		if (doc->events[i].type == CAST_EV_OUT) {
+			raw_total += doc->events[i].len;
+		} else if (doc->events[i].type == CAST_EV_MARKER &&
+		    doc->events[i].len >= nlen &&
+		    find_submem(doc->events[i].data, doc->events[i].len,
+		    needle, nlen) != NULL) {
+			double t = doc->events[i].t_ms;
+
+			if (dir >= 0 && t > from_ms + 1.0 &&
+			    (!found || i < best_idx)) {
+				best_idx = i;
+				found = 1;
+			} else if (dir < 0 && t < from_ms - 1.0 &&
+			    (!found || i > best_idx)) {
+				best_idx = i;
+				found = 1;
 			}
 		}
-	} else {
-		for (size_t i = doc->nevents; i > 0; i--) {
-			size_t idx = i - 1;
-			const struct cast_event *ev = &doc->events[idx];
+	}
 
-			if (ev->t_ms < from_ms - 1.0 &&
-			    (ev->type == CAST_EV_OUT ||
-			     ev->type == CAST_EV_MARKER) &&
-			    ev->len >= nlen &&
-			    find_submem(ev->data, ev->len, needle, nlen) != NULL) {
-				if (idx_out != NULL) {
-					*idx_out = idx;
+	if (raw_total >= nlen) {
+		vis = malloc(raw_total);
+		vis_ev = malloc(raw_total * sizeof *vis_ev);
+		if (vis != NULL && vis_ev != NULL) {
+			for (size_t i = 0; i < doc->nevents; i++) {
+				const struct cast_event *ev = &doc->events[i];
+
+				if (ev->type != CAST_EV_OUT) {
+					continue;
 				}
-				return 0;
+				for (size_t k = 0; k < ev->len; k++) {
+					unsigned char c =
+					    (unsigned char)ev->data[k];
+
+					if (!strip_ansi) {
+						vis[vis_len] = (char)c;
+						vis_ev[vis_len++] = i;
+						continue;
+					}
+					switch (st) {
+					case ESC_NONE:
+						if (c == 0x1b) {
+							st = ESC_SEEN;
+						} else {
+							vis[vis_len] = (char)c;
+							vis_ev[vis_len++] = i;
+						}
+						break;
+					case ESC_SEEN:
+						if (c == '[') {
+							st = ESC_CSI;
+						} else if (c == ']') {
+							st = ESC_OSC;
+						} else {
+							st = ESC_NONE;
+						}
+						break;
+					case ESC_CSI:
+						if (c >= 0x40 && c <= 0x7e) {
+							st = ESC_NONE;
+						}
+						break;
+					case ESC_OSC:
+						if (c == 0x07) {
+							st = ESC_NONE;
+						} else if (c == 0x1b) {
+							st = ESC_OSC_ESC;
+						}
+						break;
+					case ESC_OSC_ESC:
+						st = (c == '\\') ?
+						    ESC_NONE : ESC_OSC;
+						break;
+					}
+				}
+			}
+
+			if (vis_len >= nlen) {
+				for (size_t p = 0; p + nlen <= vis_len; p++) {
+					if (vis[p] == needle[0] &&
+					    memcmp(vis + p, needle, nlen) == 0) {
+						size_t cand =
+						    vis_ev[p + nlen - 1];
+						double t =
+						    doc->events[cand].t_ms;
+
+						if (dir >= 0 &&
+						    t > from_ms + 1.0) {
+							if (!found ||
+							    cand < best_idx) {
+								best_idx = cand;
+								found = 1;
+							}
+							break;
+						}
+						if (dir < 0 &&
+						    t < from_ms - 1.0 &&
+						    (!found ||
+						    cand > best_idx)) {
+							best_idx = cand;
+							found = 1;
+						}
+					}
+				}
 			}
 		}
+		free(vis);
+		free(vis_ev);
+	}
+
+	if (found) {
+		if (idx_out != NULL) {
+			*idx_out = best_idx;
+		}
+		return 0;
 	}
 	return -1;
 }
