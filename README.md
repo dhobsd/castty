@@ -147,8 +147,8 @@ inside the terminal:
    while narration continues, press `.` to pull the next terminal event to the
    playhead (step-dubbing), `Enter` (`V`/`O`) to commit, or `Esc` to cancel.
  * **History & Saving**: `u` undo (`Ctrl-Z`), `U` redo (`Ctrl-R`), `w` save
-   atomically, `q` quit (with dirty-check prompt; `Q` quits unconditionally),
-   `?` toggle keybinding help.
+   atomically, `W` save/export audio to a new path or format, `q` quit (with
+   dirty-check prompt; `Q` quits unconditionally), `?` toggle keybinding help.
 
 ### Miscellaneous
 
