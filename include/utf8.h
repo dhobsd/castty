@@ -1,6 +1,9 @@
 #ifndef UTF8_H_
 #define UTF8_H_
 
+#include <stddef.h>
+#include <stdint.h>
+
 /* http://bjoern.hoehrmann.de/utf-8/decoder/dfa/ */
 #define UTF8_ACCEPT 0
 #define UTF8_REJECT 1
@@ -33,6 +36,34 @@ u8_decode(uint32_t *state, uint32_t *codep, uint32_t byte)
 
 	*state = utf8d[256 + *state*16 + type];
 	return *state;
+}
+
+static inline size_t
+u8_encode(uint32_t cp, char out[4])
+{
+	if (cp < 0x80) {
+		out[0] = (char)cp;
+		return 1;
+	}
+	if (cp < 0x800) {
+		out[0] = (char)(0xc0 | (cp >> 6));
+		out[1] = (char)(0x80 | (cp & 0x3f));
+		return 2;
+	}
+	if (cp < 0x10000) {
+		out[0] = (char)(0xe0 | (cp >> 12));
+		out[1] = (char)(0x80 | ((cp >> 6) & 0x3f));
+		out[2] = (char)(0x80 | (cp & 0x3f));
+		return 3;
+	}
+	if (cp <= 0x10ffff) {
+		out[0] = (char)(0xf0 | (cp >> 18));
+		out[1] = (char)(0x80 | ((cp >> 12) & 0x3f));
+		out[2] = (char)(0x80 | ((cp >> 6) & 0x3f));
+		out[3] = (char)(0x80 | (cp & 0x3f));
+		return 4;
+	}
+	return 0;
 }
 
 #endif

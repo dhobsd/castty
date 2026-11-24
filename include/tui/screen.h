@@ -60,6 +60,24 @@ tui_style_default(void)
 	return st;
 }
 
+static inline int
+tui_vterm_decscusr(int cursor_shape, int cursor_blink)
+{
+	if (cursor_shape <= 0) {
+		return 0;
+	}
+	switch (cursor_shape) {
+	case VTERM_PROP_CURSORSHAPE_BLOCK:
+		return cursor_blink ? 1 : 2;
+	case VTERM_PROP_CURSORSHAPE_UNDERLINE:
+		return cursor_blink ? 3 : 4;
+	case VTERM_PROP_CURSORSHAPE_BAR_LEFT:
+		return cursor_blink ? 5 : 6;
+	default:
+		return 0;
+	}
+}
+
 struct tui_surface *tui_surface_create(int rows, int cols, int outfd);
 void tui_surface_destroy(struct tui_surface *sf);
 void tui_surface_resize(struct tui_surface *sf, int rows, int cols);

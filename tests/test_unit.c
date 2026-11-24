@@ -12,12 +12,15 @@
 
 #include "audio.h"
 #include "audio/pcm.h"
+#include "audio/pcm_track.h"
 #include "audio/writer.h"
 #include "audio/writer-lame.h"
 #include "audio/writer-m4a.h"
 #include "audio/writer-raw.h"
 #include "audio/writer-sndfile.h"
 #include "cast.h"
+#include "cast_doc.h"
+#include "cast_player.h"
 #include "json.h"
 #include "tui/hud.h"
 #include "tui/screen.h"
@@ -391,7 +394,7 @@ write_writer_tone(struct audio_writer *aw, enum SoundIoFormat fmt, int sb,
 
 	for (i = 0; i < frames; i++) {
 		double s = 0.35 *
-		    sin(2.0 * 3.14159265358979323846 * 440.0 * i / (double)sample_rate);
+		    sin(2.0 * M_PI * 440.0 * i / (double)sample_rate);
 
 		for (ch = 0; ch < nchannels; ch++) {
 			encode_tone_sample(fmt,
@@ -569,7 +572,7 @@ test_writer_sndfile(void)
 		if (cases[i].lossless) {
 			for (k = 0; k < 24000; k++) {
 				double exp_v = 0.35 *
-				    sin(2.0 * 3.14159265358979323846 * 440.0 * k / 48000.0);
+				    sin(2.0 * M_PI * 440.0 * k / 48000.0);
 
 				assert(fabs((double)fbuf[k * out_ch] - exp_v) < 1e-4);
 			}
@@ -786,6 +789,510 @@ test_hud_layout_and_compositor(void)
 	close(pfd[1]);
 }
 
+static void
+write_text_file(const char *path, const char *text)
+{
+	FILE *fp = fopen(path, "wb");
+	size_t len = strlen(text);
+
+	assert(fp != NULL);
+	assert(fwrite(text, 1, len, fp) == len);
+	assert(fclose(fp) == 0);
+}
+
+static void
+test_cast_doc(void)
+{
+	char tmpl1[] = "/tmp/castty_doc_v1_XXXXXX";
+	char tmpl2[] = "/tmp/castty_doc_v2_XXXXXX";
+	char tmpl3[] = "/tmp/castty_doc_v3_XXXXXX";
+	char savep[] = "/tmp/castty_doc_save_XXXXXX";
+	char err[256];
+	int fd;
+	struct cast_doc doc, clone, reloaded;
+	struct cast_cut_gap *gaps = NULL;
+	size_t ngaps = 0, idx = 0, nred = 0;
+	double saved_ms = 0.0;
+
+	fd = mkstemp(tmpl1);
+	assert(fd >= 0);
+	close(fd);
+	fd = mkstemp(tmpl2);
+	assert(fd >= 0);
+	close(fd);
+	fd = mkstemp(tmpl3);
+	assert(fd >= 0);
+	close(fd);
+	fd = mkstemp(savep);
+	assert(fd >= 0);
+	close(fd);
+
+	/* 1. v1 JSON with unicode escapes & surrogate pair */
+	write_text_file(tmpl1,
+	    "{\n"
+	    "  \"version\": 1,\n"
+	    "  \"width\": 80,\n"
+	    "  \"height\": 24,\n"
+	    "  \"duration\": 1.5,\n"
+	    "  \"command\": \"/bin/sh\",\n"
+	    "  \"title\": \"v1 demo\",\n"
+	    "  \"stdout\": [\n"
+	    "    [0.25, \"\\u001b[32mhi\\u001b[0m\\r\\n\"],\n"
+	    "    [0.75, \"emoji \\ud83d\\ude00 end\"]\n"
+	    "  ]\n"
+	    "}\n");
+	cast_doc_init(&doc);
+	assert(cast_doc_load(tmpl1, &doc, err, sizeof err) == 0);
+	assert(doc.version == 1 && doc.cols == 80 && doc.rows == 24);
+	assert(doc.nevents == 2);
+	assert(fabs(doc.events[0].t_ms - 250.0) < 1e-3);
+	assert(fabs(doc.events[1].t_ms - 1000.0) < 1e-3);
+	assert(fabs(doc.duration_ms - 1500.0) < 1e-3);
+	assert(doc.title != NULL && strcmp(doc.title, "v1 demo") == 0);
+	assert(strstr(doc.events[0].data, "\x1b[32mhi\x1b[0m") != NULL);
+	assert(strstr(doc.events[1].data, "\xf0\x9f\x98\x80") != NULL);
+	assert(cast_doc_save(&doc, savep, err, sizeof err) == 0);
+	cast_doc_init(&reloaded);
+	assert(cast_doc_load(savep, &reloaded, err, sizeof err) == 0);
+	assert(reloaded.version == 1 && reloaded.nevents == 2);
+	assert(fabs(reloaded.duration_ms - 1500.0) < 1e-1);
+	cast_doc_free(&reloaded);
+	cast_doc_free(&doc);
+
+	/* 2. v3 JSONL with nested term + delta timestamps + # comment */
+	write_text_file(tmpl3,
+	    "{\"version\": 3, \"term\": {\"cols\": 100, \"rows\": 30, "
+	    "\"type\": \"xterm-256color\", \"version\": \"1.0\"}, "
+	    "\"timestamp\": 1700000000}\n"
+	    "[0.1, \"o\", \"secret=TOKEN123\\r\\n\"]\n"
+	    "[2.4, \"o\", \"after idle TOKEN123\\r\\n\"]\n"
+	    "[0.5, \"m\", \"chap1\"]\n"
+	    "# trailing comment\n");
+	cast_doc_init(&doc);
+	assert(cast_doc_load(tmpl3, &doc, err, sizeof err) == 0);
+	assert(doc.version == 3 && doc.cols == 100 && doc.rows == 30);
+	assert(doc.nevents == 3);
+	assert(fabs(doc.events[0].t_ms - 100.0) < 1e-3);
+	assert(fabs(doc.events[1].t_ms - 2500.0) < 1e-3);
+	assert(fabs(doc.events[2].t_ms - 3000.0) < 1e-3);
+	assert(cast_doc_save(&doc, savep, err, sizeof err) == 0);
+	cast_doc_init(&reloaded);
+	assert(cast_doc_load(savep, &reloaded, err, sizeof err) == 0);
+	assert(reloaded.version == 3 && reloaded.nevents == 3);
+	assert(fabs(reloaded.events[2].t_ms - 3000.0) < 1e-2);
+	cast_doc_free(&reloaded);
+	cast_doc_free(&doc);
+
+	/* 3. v2 timeline edits: clone, marker, find, pause, cut, idle, redact, nudge */
+	write_text_file(tmpl2,
+	    "{\"version\": 2, \"width\": 80, \"height\": 24, "
+	    "\"timestamp\": 1700000000, \"title\": \"orig\"}\n"
+	    "[0.10, \"o\", \"first pwd=s3cr3t\"]\n"
+	    "[0.50, \"o\", \"middle drop\"]\n"
+	    "[1.50, \"o\", \"final s3cr3t\"]\n"
+	    "[3.50, \"x\", \"0\"]\n");
+	cast_doc_init(&doc);
+	assert(cast_doc_load(tmpl2, &doc, err, sizeof err) == 0);
+	assert(doc.version == 2 && doc.nevents == 4);
+
+	cast_doc_init(&clone);
+	assert(cast_doc_clone(&doc, &clone) == 0);
+	cast_doc_set_title(&clone, "edited");
+	assert(strcmp(doc.title, "orig") == 0);
+	assert(strcmp(clone.title, "edited") == 0);
+
+	assert(cast_doc_add_marker(&doc, 600.0, "markA") == 0);
+	assert(cast_doc_find_marker(&doc, 0.0, 1, &idx) == 0);
+	assert(doc.events[idx].type == CAST_EV_MARKER);
+	assert(cast_doc_set_marker_label(&doc, idx, "markB") == 0);
+	assert(strcmp(doc.events[idx].data, "markB") == 0);
+	assert(cast_doc_find_marker(&doc, 1000.0, -1, &idx) == 0);
+	assert(strcmp(doc.events[idx].data, "markB") == 0);
+
+	assert(cast_doc_find_text(&doc, "final", 0.0, 1, &idx) == 0);
+	assert(fabs(doc.events[idx].t_ms - 1500.0) < 1e-3);
+	assert(cast_doc_find_text(&doc, "first", 1400.0, -1, &idx) == 0);
+	assert(fabs(doc.events[idx].t_ms - 100.0) < 1e-3);
+
+	/* Pause at 1000ms for +500ms shifts >= 1000ms events */
+	assert(cast_doc_insert_pause(&doc, 1000.0, 500.0) == 0);
+	assert(fabs(doc.duration_ms - 4000.0) < 1e-3);
+
+	/* Redact secret across outputs */
+	nred = cast_doc_redact(&doc, "s3cr3t", "****");
+	assert(nred == 2);
+	assert(cast_doc_find_text(&doc, "s3cr3t", -1.0, 1, &idx) != 0);
+
+	/* Cut [400ms, 800ms) with injected continuity snapshot */
+	assert(cast_doc_cut_range(&doc, 400.0, 800.0, "SNAP", 4, 80, 24) == 0);
+	assert(fabs(doc.duration_ms - 3600.0) < 1e-3);
+	assert(cast_doc_find_text(&doc, "SNAP", -1.0, 1, &idx) == 0);
+	assert(fabs(doc.events[idx].t_ms - 400.0) < 1e-3);
+	assert(cast_doc_find_text(&doc, "middle drop", -1.0, 1, &idx) != 0);
+
+	/* Compress idle gaps > 500ms across entire doc */
+	assert(cast_doc_compress_idle(&doc, 0.0, doc.duration_ms, 500.0,
+	    &gaps, &ngaps, &saved_ms) == 0);
+	assert(ngaps >= 1 && saved_ms > 500.0);
+	free(gaps);
+
+	/* Positive nudge shifts events right cleanly */
+	double prev_t0 = doc.events[0].t_ms;
+	cast_doc_nudge(&doc, 120.0);
+	assert(fabs(doc.events[0].t_ms - (prev_t0 + 120.0)) < 1e-3);
+
+	cast_doc_free(&clone);
+	cast_doc_free(&doc);
+
+	/* 4. Sub-0.1ms v3 delta error-diffusion + invalid UTF-8 sanitization */
+	cast_doc_init(&doc);
+	doc.version = 3;
+	for (int i = 1; i <= 1000; i++) {
+		assert(cast_doc_insert_event(&doc, (double)i * 0.04,
+		    CAST_EV_OUT, ".", 1, 80, 24) == 0);
+	}
+	assert(cast_doc_insert_event(&doc, 50.0, CAST_EV_OUT,
+	    "bad\xffok", 6, 80, 24) == 0);
+	assert(cast_doc_save(&doc, savep, err, sizeof err) == 0);
+	cast_doc_init(&reloaded);
+	assert(cast_doc_load(savep, &reloaded, err, sizeof err) == 0);
+	assert(reloaded.nevents == 1001);
+	assert(fabs(reloaded.events[999].t_ms - 40.0) < 0.15);
+	assert(strstr(reloaded.events[1000].data, "bad\xef\xbf\xbdok") != NULL);
+	cast_doc_free(&reloaded);
+	cast_doc_free(&doc);
+
+	unlink(tmpl1);
+	unlink(tmpl2);
+	unlink(tmpl3);
+	unlink(savep);
+}
+
+static void
+test_cast_player(void)
+{
+	struct cast_doc doc;
+	struct cast_player *pl;
+	struct tui_surface *sf;
+	char line[64];
+	char *snap = NULL;
+	size_t snap_len = 0;
+	int scols = 0, srows = 0;
+	int cur_r = -1, cur_c = -1, cur_vis = 0, cur_shape = 0;
+	int pfd[2];
+	char out[32768];
+	size_t nread = 0;
+
+	cast_doc_init(&doc);
+	doc.version = 2;
+	doc.cols = 60;
+	doc.rows = 16;
+
+	/* Generate 300 events (>256 checkpoint stride) with cursor placement */
+	for (int i = 0; i < 300; i++) {
+		int len;
+
+		if (i == 10) {
+			len = snprintf(line, sizeof line,
+			    "\x1b[32mEARLY_%03d\x1b[0m\r\n", i);
+		} else if (i == 280) {
+			len = snprintf(line, sizeof line,
+			    "\x1b[2J\x1b[H\x1b[31mLATE_%03d\x1b[5;10H", i);
+		} else {
+			len = snprintf(line, sizeof line, "ROW_%03d\r\n", i);
+		}
+		assert(cast_doc_insert_event(&doc, (double)(i + 1) * 10.0,
+		    CAST_EV_OUT, line, (size_t)len, 60, 16) == 0);
+		if (i == 150) {
+			assert(cast_doc_insert_event(&doc, 1515.0,
+			    CAST_EV_RESIZE, NULL, 0, 70, 20) == 0);
+		}
+	}
+
+	pl = cast_player_create(&doc);
+	assert(pl != NULL);
+	assert(pipe(pfd) == 0);
+	assert(fcntl(pfd[0], F_SETFL, O_NONBLOCK) == 0);
+	sf = tui_surface_create(16, 70, pfd[1]);
+	assert(sf != NULL);
+
+	/* Seek right after event 280 (past checkpoint 256) and verify cursor + blit */
+	assert(cast_player_seek(pl, 2815.0) == 0);
+	assert(cast_player_cols(pl) == 70 && cast_player_rows(pl) == 20);
+	cast_player_get_cursor(pl, &cur_r, &cur_c, &cur_vis, &cur_shape);
+	assert(cur_r == 4 && cur_c == 9);
+	tui_surface_begin(sf);
+	cast_player_blit(pl, sf, 0, 0, 0, 0, 16, 70);
+	tui_surface_flush(sf, cur_r, cur_c, cur_vis, cur_shape);
+	read_pipe_avail(pfd[0], out, sizeof out, &nread);
+	assert(nread > 0 && strstr(out, "LATE_280") != NULL);
+
+	/* Backward scrub before resize and before event 280 */
+	assert(cast_player_seek(pl, 200.0) == 0);
+	assert(cast_player_cols(pl) == 60 && cast_player_rows(pl) == 16);
+	tui_surface_begin(sf);
+	cast_player_blit(pl, sf, 0, 0, 0, 0, 16, 60);
+	tui_surface_flush(sf, 0, 0, 1, 0);
+	read_pipe_avail(pfd[0], out, sizeof out, &nread);
+	assert(nread > 0 && strstr(out, "EARLY_010") != NULL);
+	assert(strstr(out, "LATE_280") == NULL);
+
+	/* Snapshot ANSI at t=2815 preserves LATE_280 + colors in fresh doc */
+	assert(cast_player_snapshot_ansi(&doc, 2815.0, &snap, &snap_len,
+	    &scols, &srows) == 0);
+	assert(snap != NULL && snap_len > 0 && scols == 70 && srows == 20);
+	assert(strstr(snap, "LATE_280") != NULL);
+	free(snap);
+
+	cast_player_destroy(pl);
+	cast_doc_free(&doc);
+
+	/* Altscreen (?1049h/?1049l) preservation across >256 events + cut snapshot + pan */
+	cast_doc_init(&doc);
+	doc.version = 3;
+	doc.cols = 60;
+	doc.rows = 20;
+	assert(cast_doc_insert_event(&doc, 10.0, CAST_EV_OUT,
+	    "MAIN_SHELL_PROMPT\r\n\x1b[20;1HBOTTOM_ROW_20", 39, 60, 20) == 0);
+	assert(cast_doc_insert_event(&doc, 20.0, CAST_EV_OUT,
+	    "\x1b[?1049h\x1b[HALT_VIM_VIEW", 23, 60, 20) == 0);
+	for (int i = 0; i < 270; i++) {
+		int len = snprintf(line, sizeof line, "\x1b[2;1Hvim_%d", i);
+		assert(cast_doc_insert_event(&doc, 30.0 + i * 5.0, CAST_EV_OUT,
+		    line, (size_t)len, 60, 20) == 0);
+	}
+	assert(cast_doc_insert_event(&doc, 1500.0, CAST_EV_OUT,
+	    "\x1b[?1049l", 8, 60, 20) == 0);
+	assert(cast_doc_insert_event(&doc, 1600.0, CAST_EV_OUT,
+	    "\r\nAFTER_VIM", 11, 60, 20) == 0);
+
+	pl = cast_player_create(&doc);
+	assert(pl != NULL);
+	/* Seek to end then backward right after ?1049l: main screen must survive */
+	assert(cast_player_seek(pl, 1650.0) == 0);
+	assert(cast_player_seek(pl, 1510.0) == 0);
+	tui_surface_begin(sf);
+	cast_player_blit(pl, sf, 0, 0, 0, 0, 16, 60);
+	tui_surface_flush(sf, 0, 0, 1, 0);
+	read_pipe_avail(pfd[0], out, sizeof out, &nread);
+	assert(strstr(out, "MAIN_SHELL_PROMPT") != NULL);
+
+	/* Viewport panning (src_row=4 on 20-row cast into 16-row surface) shows row 20 */
+	tui_surface_begin(sf);
+	cast_player_blit(pl, sf, 4, 0, 0, 0, 16, 60);
+	tui_surface_flush(sf, 0, 0, 1, 0);
+	read_pipe_avail(pfd[0], out, sizeof out, &nread);
+	assert(strstr(out, "BOTTOM_ROW_20") != NULL);
+	cast_player_destroy(pl);
+
+	/* Cut [5.0ms, 500.0ms) ending INSIDE altscreen preserves BOTH main & alt */
+	snap = NULL;
+	snap_len = 0;
+	assert(cast_player_snapshot_ansi(&doc, 500.0, &snap, &snap_len,
+	    &scols, &srows) == 0);
+	assert(cast_doc_cut_range(&doc, 5.0, 500.0, snap, snap_len,
+	    scols, srows) == 0);
+	free(snap);
+
+	pl = cast_player_create(&doc);
+	assert(cast_player_seek(pl, 100.0) == 0); /* still inside vim */
+	tui_surface_begin(sf);
+	cast_player_blit(pl, sf, 0, 0, 0, 0, 16, 60);
+	tui_surface_flush(sf, 0, 0, 1, 0);
+	read_pipe_avail(pfd[0], out, sizeof out, &nread);
+	assert(strstr(out, "ALT_VIM_VIEW") != NULL);
+
+	assert(cast_player_seek(pl, 1020.0) == 0); /* after ?1049l */
+	tui_surface_begin(sf);
+	cast_player_blit(pl, sf, 0, 0, 0, 0, 16, 60);
+	tui_surface_flush(sf, 0, 0, 1, 0);
+	read_pipe_avail(pfd[0], out, sizeof out, &nread);
+	assert(strstr(out, "MAIN_SHELL_PROMPT") != NULL);
+
+	tui_surface_destroy(sf);
+	close(pfd[0]);
+	close(pfd[1]);
+	cast_player_destroy(pl);
+	cast_doc_free(&doc);
+}
+
+static void
+test_pcm_track(void)
+{
+	char wavp[] = "/tmp/castty_tr_in_XXXXXX";
+	char out_wav[64];
+	char out_opus[64];
+	char out_m4a[64];
+	char err[256];
+	int fd;
+	FILE *fp;
+	struct audio_writer *w;
+	struct pcm_track tr;
+	struct pcm_edl_snapshot snap;
+	float buf[PCM_TRACK_CHANNELS * 4800];
+	float frame_pair[2];
+	int rate = 0, stereo = 0;
+	int dub1_id = -1, dub2_id = -1;
+	FILE *dub1_fp = NULL, *dub2_fp = NULL;
+
+	/* Prepare temp paths */
+	fd = mkstemp(wavp);
+	assert(fd >= 0);
+	close(fd);
+	/* Keep extensionless base unique, suffix by PID for format tests */
+	snprintf(out_wav, sizeof out_wav, "/tmp/castty_tr_%ld.wav",
+	    (long)getpid());
+	snprintf(out_opus, sizeof out_opus, "/tmp/castty_tr_%ld.opus",
+	    (long)getpid());
+	snprintf(out_m4a, sizeof out_m4a, "/tmp/castty_tr_%ld.m4a",
+	    (long)getpid());
+
+	/* Empty track check */
+	pcm_track_init(&tr);
+	pcm_track_create_empty(&tr, 3000.0);
+	assert(fabs(pcm_track_duration_ms(&tr) - 3000.0) < 1e-2);
+	assert(pcm_track_read_frames(&tr, 4800, buf, 100) == 100);
+	assert(fabsf(buf[0]) < 1e-6f);
+	pcm_track_destroy(&tr);
+
+	/* Write 2s WAV: first 1s = +0.80f step, second 1s = -0.80f step */
+	fp = fopen(wavp, "wb");
+	assert(fp != NULL);
+	w = audio_open_writer(fp, AUDIO_FMT_WAV, PCM_TRACK_RATE, 0);
+	assert(w != NULL);
+	for (size_t i = 0; i < sizeof buf / sizeof buf[0]; i++) {
+		buf[i] = 0.80f;
+	}
+	for (int c = 0; c < 10; c++) {
+		audio_writer_write(w, SoundIoFormatFloat32NE, (char *)buf,
+		    (int)sizeof buf, (int)(2 * sizeof(float)));
+	}
+	for (size_t i = 0; i < sizeof buf / sizeof buf[0]; i++) {
+		buf[i] = -0.80f;
+	}
+	for (int c = 0; c < 10; c++) {
+		audio_writer_write(w, SoundIoFormatFloat32NE, (char *)buf,
+		    (int)sizeof buf, (int)(2 * sizeof(float)));
+	}
+	audio_writer_destroy(w);
+	fclose(fp);
+
+	pcm_track_init(&tr);
+	assert(pcm_track_load(&tr, wavp, AUDIO_FMT_WAV, 2500.0,
+	    err, sizeof err) == 0);
+	assert(fabs(pcm_track_duration_ms(&tr) - 2500.0) < 1e-2);
+	assert(tr.has_audio == 1);
+
+	/* Peak query reflects signal vs trailing silence */
+	pcm_track_ensure_peaks(&tr);
+	assert(pcm_track_peak_in_ms(&tr, 100.0, 400.0) > 0.70f);
+	assert(pcm_track_peak_in_ms(&tr, 2100.0, 2400.0) < 0.01f);
+
+	/* Save EDL snapshot before edits */
+	assert(pcm_edl_snapshot_take(&tr, &snap) == 0);
+
+	/* Cut [600ms, 1400ms) joining +0.80f to -0.80f at frame 28800 */
+	assert(pcm_track_cut_range(&tr, 600.0, 1400.0) == 0);
+	assert(fabs(pcm_track_duration_ms(&tr) - 1700.0) < 1e-2);
+
+	/* Verify 10 ms half-cosine fade eliminates step pop at cut frame 28800 */
+	assert(pcm_track_read_frames(&tr, 28800 - 600, buf, 1200) == 1200);
+	assert(buf[0] > 0.70f);
+	assert(fabsf(buf[600 * 2]) < 0.05f);
+	assert(buf[1199 * 2] < -0.70f);
+	for (int f = 0; f < 1199; f++) {
+		float diff = fabsf(buf[(f + 1) * 2] - buf[f * 2]);
+		assert(diff < 0.02f);
+	}
+
+	/* Mute [100ms, 300ms) -> center is digital silence */
+	assert(pcm_track_mute_range(&tr, 100.0, 300.0) == 0);
+	assert(pcm_track_read_frames(&tr, 200 * 48, buf, 480) == 480);
+	assert(fabsf(buf[240 * 2]) < 1e-5f);
+
+	/* Insert 200ms silence at 200ms -> coalesces without growing pieces */
+	assert(pcm_track_insert_silence(&tr, 100.0, 100.0) == 0);
+	size_t pcount = tr.npieces;
+	assert(pcm_track_insert_silence(&tr, 200.0, 50.0) == 0);
+	assert(pcm_track_insert_silence(&tr, 250.0, 50.0) == 0);
+	assert(tr.npieces == pcount);
+	assert(fabs(pcm_track_duration_ms(&tr) - 1900.0) < 1e-2);
+
+	/* Nudge +100ms and -100ms roundtrip */
+	assert(pcm_track_nudge(&tr, 100.0) == 0);
+	assert(fabs(pcm_track_duration_ms(&tr) - 2000.0) < 1e-2);
+	assert(pcm_track_nudge(&tr, -100.0) == 0);
+	assert(fabs(pcm_track_duration_ms(&tr) - 1900.0) < 1e-2);
+
+	/* Restore snapshot back to clean 2500ms track */
+	assert(pcm_edl_snapshot_restore(&tr, &snap) == 0);
+	assert(fabs(pcm_track_duration_ms(&tr) - 2500.0) < 1e-2);
+	pcm_edl_snapshot_free(&snap);
+
+	/* Overdub pass 1 (mix + duck=0.25) and pass 2 (bakes pass 1!) */
+	assert(pcm_track_new_scratch(&tr, &dub1_id, &dub1_fp) == 0);
+	for (int f = 0; f < 24000; f++) {
+		frame_pair[0] = 0.30f;
+		frame_pair[1] = 0.30f;
+		assert(fwrite(frame_pair, sizeof(float), 2, dub1_fp) == 2);
+	}
+	fflush(dub1_fp);
+	assert(pcm_track_apply_recording(&tr, 200.0, dub1_id, 0, 24000,
+	    0, 0.25f) == 0);
+	/* Pass 1 midpoint around 350ms: 0.80 * 0.25 + 0.30 = 0.50f */
+	assert(pcm_track_read_frames(&tr, 350 * 48, buf, 10) == 10);
+	assert(fabsf(buf[0] - 0.50f) < 0.02f);
+
+	/* Pass 2 overlapping at 300ms (0.50f * 0.5 + 0.15 = 0.40f) */
+	assert(pcm_track_new_scratch(&tr, &dub2_id, &dub2_fp) == 0);
+	for (int f = 0; f < 24000; f++) {
+		frame_pair[0] = 0.15f;
+		frame_pair[1] = 0.15f;
+		assert(fwrite(frame_pair, sizeof(float), 2, dub2_fp) == 2);
+	}
+	fflush(dub2_fp);
+	assert(pcm_track_apply_recording(&tr, 300.0, dub2_id, 0, 24000,
+	    0, 0.50f) == 0);
+	assert(pcm_track_read_frames(&tr, 350 * 48, buf, 10) == 10);
+	assert(fabsf(buf[0] - 0.40f) < 0.02f);
+
+	/* Replace mode over [2000ms, 2500ms) extends cleanly past end too */
+	assert(pcm_track_apply_recording(&tr, 2200.0, dub1_id, 0, 24000,
+	    1, 1.0f) == 0);
+	assert(fabs(pcm_track_duration_ms(&tr) - 2700.0) < 1e-2);
+
+	/* Save roundtrips: WAV, Opus, M4A */
+	assert(pcm_track_save(&tr, out_wav, AUDIO_FMT_WAV, 0,
+	    err, sizeof err) == 0);
+	assert(audio_probe_file(out_wav, AUDIO_FMT_WAV, &rate, &stereo,
+	    err, sizeof err) == 0);
+	assert(rate == PCM_TRACK_RATE && stereo == 1);
+
+	assert(pcm_track_save(&tr, out_opus, AUDIO_FMT_OPUS, 0,
+	    err, sizeof err) == 0);
+	assert(audio_probe_file(out_opus, AUDIO_FMT_OPUS, &rate, &stereo,
+	    err, sizeof err) == 0);
+
+	assert(pcm_track_save(&tr, out_m4a, AUDIO_FMT_M4A, 0,
+	    err, sizeof err) == 0);
+	assert(audio_probe_file(out_m4a, AUDIO_FMT_M4A, &rate, &stereo,
+	    err, sizeof err) == 0);
+
+	pcm_track_destroy(&tr);
+
+	/* Reload saved M4A into a fresh pcm_track */
+	pcm_track_init(&tr);
+	assert(pcm_track_load(&tr, out_m4a, AUDIO_FMT_M4A, 0.0,
+	    err, sizeof err) == 0);
+	assert(tr.has_audio == 1 && tr.total_frames > 48000);
+	pcm_track_destroy(&tr);
+
+	unlink(wavp);
+	unlink(out_wav);
+	unlink(out_opus);
+	unlink(out_m4a);
+}
+
 int
 main(int argc, char **argv)
 {
@@ -802,6 +1309,9 @@ main(int argc, char **argv)
 	test_writer_sndfile();
 	test_writer_m4a();
 	test_hud_layout_and_compositor();
+	test_cast_doc();
+	test_cast_player();
+	test_pcm_track();
 
 	printf("C unit tests passed\n");
 	return 0;

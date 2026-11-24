@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import fcntl
 import json
+import math
 import os
 import pty
 import re
@@ -13,6 +14,7 @@ import tempfile
 import termios
 import time
 import unittest
+import wave
 
 ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CASTTY = os.path.join(ROOT_DIR, "src", "castty")
@@ -473,6 +475,137 @@ class TestRecordingAndFormats(unittest.TestCase):
                 blines = [json.loads(line) for line in f]
             self.assertEqual(blines[0]["term"]["cols"], 80)
             self.assertEqual(blines[0]["term"]["rows"], 23)
+
+    def test_edit_cli_and_interactive_session(self):
+        with tempfile.TemporaryDirectory(prefix="castty_edit_cli_") as d:
+            cast_path = os.path.join(d, "demo.cast")
+            wav_path = os.path.join(d, "demo.wav")
+
+            # CLI validation (non-TTY, missing file, bad -F, -l)
+            res = subprocess.run(
+                [CASTTY, "edit"],
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+            )
+            self.assertNotEqual(res.returncode, 0)
+
+            res = subprocess.run(
+                [CASTTY, "edit", "-F", "notasoundfmt", cast_path],
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+            )
+            self.assertNotEqual(res.returncode, 0)
+            self.assertIn("unsupported audio format", res.stderr)
+
+            res = subprocess.run(
+                [CASTTY, "edit", cast_path],
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+            )
+            self.assertNotEqual(res.returncode, 0)
+            self.assertIn("interactive terminal", res.stderr)
+
+            res = subprocess.run(
+                [CASTTY, "edit", "-l"],
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+            )
+            self.assertEqual(res.returncode, 0, msg=res.stderr)
+            self.assertIn("Available output devices", res.stdout)
+
+            # Build 2.5s asciicast v3 + 2.5s 48kHz stereo sine WAV
+            with open(cast_path, "w", encoding="utf-8") as f:
+                f.write(json.dumps({
+                    "version": 3,
+                    "term": {"cols": 80, "rows": 24, "type": "xterm-256color"},
+                    "timestamp": 1700000000,
+                }) + "\n")
+                events = [
+                    (0.10, "o", "\x1b[32mKEEP_BEFORE\x1b[0m\r\n"),
+                    (0.50, "o", "\x1b[31mKEEP_COLOR\r\n"),
+                    (0.30, "o", "SECRET=tok999\r\n"),
+                    (0.30, "o", "\x1b[34mCUT_SCREEN_STATE\x1b[0m\r\n"),
+                    (0.50, "o", "\x1b[24;1HAFTER_KEEP"),
+                    (0.80, "x", "0"),
+                ]
+                for ev in events:
+                    f.write(json.dumps(list(ev)) + "\n")
+
+            with wave.open(wav_path, "wb") as wf:
+                wf.setnchannels(2)
+                wf.setsampwidth(2)
+                wf.setframerate(48000)
+                frames = bytearray()
+                for n in range(48000 * 5 // 2):
+                    val = int(18000 * math.sin(2.0 * math.pi * 440.0 * n / 48000.0))
+                    frames.extend(struct.pack("<hh", val, val))
+                wf.writeframes(bytes(frames))
+
+            rc, dt, out, err = run_in_pty(
+                ["edit", "-a", wav_path, cast_path],
+                rows=24, cols=80, wait_for=b"00:00",
+                send_seq=[
+                    # Two right-arrow CSI sequences in one write (+1.0s -> 1.0s)
+                    (0.10, b"\x1b[C\x1b[C"),
+                    (0.20, b"i"),
+                    (0.30, b"g1.5\n"),
+                    (0.40, b"o"),
+                    (0.50, b"x"),
+                    (0.65, b"P0.4\n"),
+                    # Add marker, rename in-place with K, add temp marker & delete with d
+                    (0.80, b"Kchap_old\n"),
+                    (0.92, b"K\x7f\x7f\x7fmid\n"),
+                    (1.04, b"g0.2\nk"),
+                    (1.16, b"d"),
+                    # Jump to end on 80x24 PTY: row 24 AFTER_KEEP auto-pans into view
+                    (1.28, b"$"),
+                    (1.40, b"Rtok999\n\n"),
+                    (1.52, b"TEdited Title\n"),
+                    (1.64, b"u"),
+                    (1.76, b"U"),
+                    (1.88, b"q"),
+                    (2.00, b"n"),
+                    (2.12, b"w"),
+                    (2.26, b"q"),
+                ],
+                timeout=10.0,
+            )
+            self.assertEqual(rc, 0, msg=err)
+            self.assertLess(dt, 6.0)
+            self.assertEqual(err, "")
+            self.assertIn(b"Unsaved", out)
+            self.assertIn(b"AFTER_KEEP", out)  # row 24 panned into 22-row viewport!
+
+            with open(cast_path, "r", encoding="utf-8") as f:
+                lines = [json.loads(line) for line in f if not line.startswith("#")]
+            hdr = lines[0]
+            self.assertEqual(hdr["version"], 3)
+            self.assertEqual(hdr.get("title"), "Edited Title")
+            evs = lines[1:]
+            outs = "".join(ev[2] for ev in evs if ev[1] == "o")
+            markers = [ev for ev in evs if ev[1] == "m"]
+            self.assertIn("KEEP_BEFORE", outs)
+            self.assertIn("AFTER_KEEP", outs)
+            self.assertIn("CUT_SCREEN_STATE", outs)  # preserved by ANSI cut snapshot!
+            self.assertNotIn("tok999", outs)
+            self.assertIn("****", outs)
+            self.assertEqual(len(markers), 1)
+            self.assertEqual(markers[0][2], "chap_mid")
+            cast_dur = sum(max(ev[0], 0.0) for ev in evs)
+            self.assertAlmostEqual(cast_dur, 2.40, delta=0.05)
+
+            # Verify edited WAV duration matches cast and inserted pause [1.0s..1.4s) is silent
+            with wave.open(wav_path, "rb") as wf:
+                sr = wf.getframerate()
+                nframes = wf.getnframes()
+                raw = wf.readframes(nframes)
+            wav_dur = nframes / float(sr)
+            self.assertAlmostEqual(wav_dur, cast_dur, delta=0.05)
+            samples = struct.unpack(f"<{nframes * 2}h", raw)
+            # Midpoint of inserted 0.4s silence at 1.2s (sample ~57600) must be quiet
+            mid_slice = samples[57600 * 2:58000 * 2]
+            self.assertLess(max(abs(s) for s in mid_slice), 10)
+            # No step pop larger than 8% of full-scale across cut/silence boundaries
+            for frame_idx in range(47000, 68000):
+                d_step = abs(samples[(frame_idx + 1) * 2] - samples[frame_idx * 2]) / 32768.0
+                self.assertLess(d_step, 0.08, msg=f"Audio click at frame {frame_idx}: {d_step}")
 
 
 @unittest.skipUnless(HAS_FFMPEG, "requires ffmpeg/ffprobe")
@@ -958,6 +1091,70 @@ class TestAudioLoopback(unittest.TestCase):
         self.assertEqual(len([ev for ev in lines[1:] if ev[1] == "m"]), 1)
         cast_dur = sum(max(ev[0], 0.0) for ev in lines[1:])
         self.assertAlmostEqual(cast_dur, float(info["duration"]), delta=0.25)
+
+    def test_edit_voiceover_freeze_and_step_dub_loopback(self):
+        out_wav = os.path.join(self.tmpdir.name, "dub_out.wav")
+        cast_path = os.path.join(self.tmpdir.name, "dub_in.cast")
+        with open(cast_path, "w", encoding="utf-8") as f:
+            f.write(json.dumps({
+                "version": 3,
+                "term": {"cols": 80, "rows": 24, "type": "xterm-256color"},
+                "timestamp": 1700000000,
+            }) + "\n")
+            for ev in [
+                (0.10, "o", "INIT_FRAME\r\n"),
+                (0.50, "o", "STEP_EVENT_TWO\r\n"),
+                (1.20, "o", "END_EVENT\r\n"),
+                (0.20, "x", "0"),
+            ]:
+                f.write(json.dumps(list(ev)) + "\n")
+
+        play = subprocess.Popen(["paplay", "-d", "castty_t_lsink_st", self.tone_wav])
+        try:
+            time.sleep(0.2)
+            rc, _, out, err = run_in_pty(
+                ["edit", "-d", self.st_dev, "-a", out_wav, cast_path],
+                rows=24, cols=100, wait_for=b"00:00",
+                send_seq=[
+                    (0.10, b"g0.2\n"),
+                    (0.25, b"V"),
+                    (0.50, b" "),
+                    (1.10, b"."),
+                    (1.40, b"\n"),
+                    (1.60, b"w"),
+                    (1.75, b"q"),
+                ],
+                timeout=10.0,
+            )
+        finally:
+            play.wait()
+
+        self.assertEqual(rc, 0, msg=err)
+        self.assertEqual(err, "")
+        out_s = out.decode("utf-8", "replace")
+        self.assertIn("DUB", out_s)
+        self.assertTrue(any(ch in out_s for ch in "\u2581\u2582\u2583\u2584\u2585\u2586\u2587\u2588"),
+                        msg="Expected VU bar block glyphs during live dub")
+
+        info = ffprobe_stream(out_wav)
+        self.assertEqual(info.get("codec_name"), "pcm_s16le")
+        self.assertGreater(float(info["duration"]), 1.5)
+        dub_mean, _ = probe_volume(["-ss", "0.35", "-t", "0.8", "-i", out_wav])
+        self.assertAlmostEqual(dub_mean, self.ref_mean, delta=3.0)
+
+        with open(cast_path, "r", encoding="utf-8") as f:
+            lines = [json.loads(line) for line in f if not line.startswith("#")]
+        evs = lines[1:]
+        t_step = None
+        acc = 0.0
+        for dt_s, typ, data in evs:
+            acc += dt_s
+            if typ == "o" and "STEP_EVENT_TWO" in data:
+                t_step = acc
+        self.assertIsNotNone(t_step)
+        # Without freeze/step, STEP_EVENT_TWO was at 0.60s; freeze (~0.6s) + step pulled it >0.85s
+        self.assertGreater(t_step, 0.85)
+        self.assertAlmostEqual(acc, float(info["duration"]), delta=0.20)
 
 
 if __name__ == "__main__":

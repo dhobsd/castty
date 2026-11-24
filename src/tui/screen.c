@@ -114,30 +114,11 @@ sb_printf(struct tui_sb *sb, const char *fmt, ...)
 static void
 sb_append_utf8(struct tui_sb *sb, uint32_t cp)
 {
-	unsigned char out[4];
-	size_t n = 0;
+	char out[4];
+	size_t n = u8_encode(cp, out);
 
-	if (cp < 0x80) {
-		out[0] = (unsigned char)cp;
-		n = 1;
-	} else if (cp < 0x800) {
-		out[0] = (unsigned char)(0xc0 | (cp >> 6));
-		out[1] = (unsigned char)(0x80 | (cp & 0x3f));
-		n = 2;
-	} else if (cp < 0x10000) {
-		out[0] = (unsigned char)(0xe0 | (cp >> 12));
-		out[1] = (unsigned char)(0x80 | ((cp >> 6) & 0x3f));
-		out[2] = (unsigned char)(0x80 | (cp & 0x3f));
-		n = 3;
-	} else if (cp <= 0x10ffff) {
-		out[0] = (unsigned char)(0xf0 | (cp >> 18));
-		out[1] = (unsigned char)(0x80 | ((cp >> 12) & 0x3f));
-		out[2] = (unsigned char)(0x80 | ((cp >> 6) & 0x3f));
-		out[3] = (unsigned char)(0x80 | (cp & 0x3f));
-		n = 4;
-	}
 	if (n > 0) {
-		sb_append(sb, (const char *)out, n);
+		sb_append(sb, out, n);
 	}
 }
 
@@ -920,25 +901,6 @@ void
 tui_vterm_get_cursor(const struct tui_vterm *tv, int *row, int *col,
     int *visible, int *shape)
 {
-	int dec_shape = 0;
-
-	if (tv->cursor_shape > 0) {
-		switch (tv->cursor_shape) {
-		case VTERM_PROP_CURSORSHAPE_BLOCK:
-			dec_shape = tv->cursor_blink ? 1 : 2;
-			break;
-		case VTERM_PROP_CURSORSHAPE_UNDERLINE:
-			dec_shape = tv->cursor_blink ? 3 : 4;
-			break;
-		case VTERM_PROP_CURSORSHAPE_BAR_LEFT:
-			dec_shape = tv->cursor_blink ? 5 : 6;
-			break;
-		default:
-			dec_shape = 0;
-			break;
-		}
-	}
-
 	if (row != NULL) {
 		*row = tv->cursor.row;
 	}
@@ -949,7 +911,8 @@ tui_vterm_get_cursor(const struct tui_vterm *tv, int *row, int *col,
 		*visible = tv->cursor_visible;
 	}
 	if (shape != NULL) {
-		*shape = dec_shape;
+		*shape = tui_vterm_decscusr(tv->cursor_shape,
+		    tv->cursor_blink);
 	}
 }
 

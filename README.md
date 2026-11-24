@@ -31,7 +31,8 @@ on-the-fly MP3 encoding and decoding,
 and Ogg Vorbis audio support, [FFmpeg](https://ffmpeg.org/) (`libavformat`,
 `libavcodec`, `libavutil`) for `.m4a` (AAC) encoding and decoding, and
 [libvterm](https://www.leonerd.org.uk/code/libvterm/) for live terminal
-compositing in the recording HUD.
+compositing in the recording HUD as well as clean terminal scrubbing and cut
+snapshots in `castty edit`.
 
 There are no UI build dependencies because I find that idea a little silly.
 
@@ -110,6 +111,42 @@ Currently supported commands are:
  * `p`: Pause or unpause the recording. Neither terminal nor audio will be
    recorded during the paused period. When unpausing, CasTTY requests the
    screen to be redrawn. This may cause your terminal buffer to clear.
+
+### Interactive Editor (`castty edit`)
+
+    usage: castty edit [-a <audio>] [-d <in_dev>] [-F <format>] [-l] [-o <out_dev>] [-R] <file.cast>
+     -a <audio>     Accompanying audio file to edit/save alongside the cast.
+     -d <in_dev>    Audio input device ID for voiceover/punch-in dubbing.
+     -F <format>    Audio format: raw, mp3, wav, flac, opus, ogg, m4a.
+     -h             Show this help.
+     -l             List available audio input and output devices and exit.
+     -o <out_dev>   Audio output device ID for playback.
+     -R             Use raw audio devices.
+
+`castty edit` loads asciicast v1, v2, and v3 files together with optional audio
+for synchronized playback, timeline/audio editing, and live voiceover dubbing
+inside the terminal:
+
+ * **Navigation & Playback**: `Space` play/pause, `h`/`l` (`Left`/`Right`)
+   scrub ±0.5s, `H`/`L` (`[`, `]`, `PgUp`/`PgDn`) scrub ±5s, `,`/`.` step by
+   terminal event, `0`/`$` jump to start/end, `g` (`:`) jump to timestamp,
+   `/` search terminal output/markers, `n`/`p` jump between markers, `+`/`-`
+   change playback speed, `M` toggle monitor mute, `Up`/`Down` pan viewport,
+   `Tab` toggle the side HUD.
+ * **Timeline & Audio Edits**: `i`/`o` mark In/Out selection (`c` or `Esc`
+   clears), `x` cut `[In, Out)` with synthesized terminal state continuity and
+   10 ms half-cosine audio crossfade, `m` mute audio selection, `s` compress idle
+   gaps, `P` insert pause/silence at playhead, `(`/`)` nudge A/V sync ±50 ms,
+   `k` add unnamed marker, `K` add or rename marker at playhead, `d` delete
+   marker near playhead, `R` redact matching text, `T` edit title.
+ * **Voiceover & Pause-to-Extend Dubbing**: `V` start replace voiceover or `O`
+   start overdub mix (ducks background track to 25%). While dubbing, press
+   `Space` to freeze the terminal frame and continuously extend pause duration
+   while narration continues, press `.` to pull the next terminal event to the
+   playhead (step-dubbing), `Enter` (`V`/`O`) to commit, or `Esc` to cancel.
+ * **History & Saving**: `u` undo (`Ctrl-Z`), `U` redo (`Ctrl-R`), `w` save
+   atomically, `q` quit (with dirty-check prompt; `Q` quits unconditionally),
+   `?` toggle keybinding help.
 
 ### Miscellaneous
 
